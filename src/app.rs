@@ -3,14 +3,17 @@ use std::process::ExitCode;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use clap::Parser;
+use rpassword::prompt_password;
 use serde::Serialize;
 use tracing_subscriber::EnvFilter;
 
+use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::api::{CatalogExchange, PolarisClient};
 use crate::cli::{
-    Cli, Command, DatasetArgs, ListCommand, ListSubcommand, LocalListArgs, RemoteListArgs, SyncArgs,
+    AccountCommand, AccountSubcommand, Cli, Command, DatasetArgs, ListCommand, ListSubcommand,
+    LocalListArgs, RemoteListArgs, SyncArgs,
 };
-use crate::config::Config;
+use crate::config::{ApiKeySource, Config};
 use crate::error::{Result, TickError};
 use crate::layout::{Layout, LocalSnapshotEntry};
 use crate::materialize::{MaterializeExecution, materialize_range_days};
@@ -31,11 +34,14 @@ pub async fn main_entry() -> ExitCode {
 }
 
 pub async fn run(cli: Cli) -> Result<u8> {
-    let config = Config::from_env()?;
     match cli.command {
-        None => run_browser(&config).await,
-        Some(Command::List(args)) => run_list(&config, args).await,
+        Some(Command::Account(args)) => run_account(args),
+        Some(Command::List(args)) => {
+            let config = Config::from_env()?;
+            run_list(&config, args).await
+        }
         Some(Command::Sync(args)) => {
+            let config = Config::from_env()?;
             let client = PolarisClient::new(
                 config.base_url.clone(),
                 config.api_key.clone(),
@@ -43,7 +49,47 @@ pub async fn run(cli: Cli) -> Result<u8> {
             )?;
             run_sync(&config, &client, args).await
         }
+        None => {
+            let config = Config::from_env()?;
+            run_browser(&config).await
+        }
     }
+}
+
+fn run_account(args: AccountCommand) -> Result<u8> {
+    match args.subcommand {
+        AccountSubcommand::SetKey => run_account_set_key(),
+        AccountSubcommand::Status => run_account_status(),
+    }
+}
+
+fn run_account_set_key() -> Result<u8> {
+    let api_key = prompt_password("Polaris API key: ")
+        .context("failed to read API key from terminal")
+        .map_err(TickError::Other)?;
+    let api_key = api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(TickError::InvalidArgument(
+            "API key cannot be empty".into(),
+        ));
+    }
+
+    let store = KeychainCredentialStore::new()?;
+    store.set_api_key(&api_key)?;
+    println!("Stored Polaris API key in the OS credential store.");
+    Ok(0)
+}
+
+fn run_account_status() -> Result<u8> {
+    let config = Config::from_env()?;
+    let status = match config.api_key_source {
+        Some(ApiKeySource::Environment) => "configured via POLARIS_API_KEY",
+        Some(ApiKeySource::CredentialStore) => "configured via OS credential store",
+        None => "not configured",
+    };
+    println!("Polaris account status: {status}");
+    println!("Base URL: {}", config.base_url);
+    Ok(0)
 }
 
 async fn run_browser(config: &Config) -> Result<u8> {

@@ -137,6 +137,8 @@ Current command surface:
 
 ```text
 tick
+tick account set-key
+tick account status
 tick list [--exchange <EXCHANGE>] [--asset <ASSET>] [--search <QUERY>] [--limit <N>] [--json]
 tick list local [--exchange <EXCHANGE>] [--asset <ASSET>] [--date <YYYY-MM-DD>] [--json]
 tick sync --exchange <EXCHANGE> --asset <ASSET> --from <FROM> --to <TO> [--json] [--concurrency <N>]
@@ -179,6 +181,26 @@ Filtered example:
 ./target/debug/tick list \
   --exchange aster \
   --search btc
+```
+
+### `account set-key`
+
+Prompts for a Polaris API key and stores it in the OS credential store. Stored credentials are used automatically when `POLARIS_API_KEY` is not set.
+
+Example:
+
+```bash
+./target/debug/tick account set-key
+```
+
+### `account status`
+
+Prints whether `tick` currently has a Polaris API key configured, and whether that credential came from `POLARIS_API_KEY` or the OS credential store.
+
+Example:
+
+```bash
+./target/debug/tick account status
 ```
 
 ### `list local`
@@ -235,18 +257,19 @@ JSON output:
 
 ## Environment Variables
 
-`tick` is env-configured only.
-
 - `POLARIS_BASE_URL`
   - Default: `https://api.polaris.supply`
 - `POLARIS_API_KEY`
   - Optional bearer token for authenticated Polaris requests
+  - Takes precedence over the stored credential from `tick account set-key`
 - `TICK_ROOT`
   - Optional override for the local dataset root
 - `TICK_CONCURRENCY`
   - Default: `4`
 - `TICK_TIMEOUT_SECS`
   - Default: `60`
+
+If `POLARIS_API_KEY` is unset, `tick` falls back to the Polaris API key stored in the OS credential store.
 
 Example:
 

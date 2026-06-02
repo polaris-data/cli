@@ -289,6 +289,7 @@ impl RemoteListTui {
         let config = Config {
             base_url: String::new(),
             api_key: None,
+            api_key_source: None,
             root: self.root.clone(),
             concurrency: self.concurrency,
             timeout: Duration::from_secs(60),

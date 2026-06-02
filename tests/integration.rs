@@ -369,6 +369,7 @@ fn config_for_test(base_url: String, root: &std::path::Path) -> Config {
     Config {
         base_url,
         api_key: None,
+        api_key_source: None,
         root: root.to_path_buf(),
         concurrency: 4,
         timeout: Duration::from_secs(5),

@@ -9,8 +9,21 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    Account(AccountCommand),
     List(ListCommand),
     Sync(SyncArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AccountCommand {
+    #[command(subcommand)]
+    pub subcommand: AccountSubcommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum AccountSubcommand {
+    SetKey,
+    Status,
 }
 
 #[derive(Debug, Clone, Args)]
