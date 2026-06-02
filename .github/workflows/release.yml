@@ -4,12 +4,6 @@ on:
   push:
     tags:
       - "v*.*.*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing git tag to release, for example v0.1.0"
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -30,14 +24,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
-          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            tag="${GITHUB_REF_NAME}"
-          else
-            echo "This workflow must run from a tag push or a manual dispatch with a tag input." >&2
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "This workflow must run from a tag push." >&2
             exit 1
           fi
+
+          tag="${GITHUB_REF_NAME}"
 
           if [[ -z "${tag}" ]]; then
             echo "Release tag is empty." >&2
@@ -87,7 +79,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - runner: macos-13
+          - runner: macos-15-intel
             target: x86_64-apple-darwin
           - runner: macos-14
             target: aarch64-apple-darwin
