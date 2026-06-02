@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -46,17 +46,12 @@ struct CatalogQuery {
     asset: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct DownloadQuery {
-    key: String,
-}
-
 #[derive(Debug, Serialize)]
 struct SnapshotsResponse {
     total: usize,
     total_bytes: u64,
     next_cursor: Option<String>,
-    snapshots: Vec<SnapshotEntry>,
+    data: Vec<SnapshotEntry>,
 }
 
 #[tokio::test]
@@ -122,7 +117,7 @@ async fn missing_catalog_asset_returns_dataset_unavailable() {
 }
 
 #[tokio::test]
-async fn sync_follows_redirect_and_downloads_files() {
+async fn sync_downloads_files_from_standardized_snapshot_urls() {
     let fixture = SnapshotFixture::basic();
     let server = TestServer::spawn(fixture.clone()).await;
     let tempdir = TempDir::new().expect("tempdir");
@@ -290,10 +285,14 @@ impl SnapshotFixture {
             vec![SnapshotEntry {
                 key: key_a.clone(),
                 filename: "a.jsonl.zst".into(),
+                download_url: "__BASE_URL__/files/bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst"
+                    .into(),
             }],
             vec![SnapshotEntry {
                 key: key_b.clone(),
                 filename: "b.jsonl.zst".into(),
+                download_url: "__BASE_URL__/files/bronze/aster/BTCUSDT/2026-06-01/b.jsonl.zst"
+                    .into(),
             }],
         ];
         let files = HashMap::from([
@@ -349,7 +348,6 @@ impl TestServer {
         let app = Router::new()
             .route("/catalog", get(handle_catalog))
             .route("/snapshots", get(handle_snapshots))
-            .route("/snapshots/download", get(handle_download))
             .route("/files/{*key}", get(handle_file))
             .with_state(state);
 
@@ -419,7 +417,19 @@ async fn handle_snapshots(
         Some("page2") => 1,
         _ => 999,
     };
-    let snapshots = state.pages.get(page_index).cloned().unwrap_or_default();
+    let snapshots = state
+        .pages
+        .get(page_index)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut snapshot| {
+            snapshot.download_url = snapshot
+                .download_url
+                .replace("__BASE_URL__", &state.base_url);
+            snapshot
+        })
+        .collect::<Vec<_>>();
     let next_cursor = if page_index + 1 < state.pages.len() {
         Some("page2".to_string())
     } else {
@@ -429,21 +439,8 @@ async fn handle_snapshots(
         total: state.pages.iter().map(Vec::len).sum(),
         total_bytes: state.total_bytes,
         next_cursor,
-        snapshots,
+        data: snapshots,
     })
-}
-
-async fn handle_download(
-    State(state): State<TestServerState>,
-    Query(query): Query<DownloadQuery>,
-) -> Response {
-    let location = format!("{}/files/{}", state.base_url, query.key);
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        axum::http::header::LOCATION,
-        HeaderValue::from_str(&location).expect("location header"),
-    );
-    (StatusCode::FOUND, headers).into_response()
 }
 
 async fn handle_file(State(state): State<TestServerState>, Path(key): Path<String>) -> Response {

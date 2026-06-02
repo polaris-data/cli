@@ -225,8 +225,7 @@ async fn download_once(client: &PolarisClient, snapshot: &SnapshotPlan) -> Resul
             .map_err(TickError::Other)?;
     }
 
-    let download_url = client.fetch_download_url(&snapshot.key).await?;
-    let response = client.download(&download_url).await?;
+    let response = client.download(&snapshot.download_url).await?;
 
     if tokio::fs::metadata(&snapshot.local_path).await.is_ok()
         && snapshot.state != LocalSnapshotState::Present

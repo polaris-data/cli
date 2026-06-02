@@ -36,18 +36,62 @@ pub struct CatalogAsset {
     pub source: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 struct SnapshotsPage {
-    pub total: usize,
+    pub total: Option<usize>,
     pub total_bytes: u64,
     pub next_cursor: Option<String>,
     pub snapshots: Vec<SnapshotEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StandardSnapshotsPageWire {
+    total: Option<usize>,
+    #[serde(default)]
+    total_bytes: Option<u64>,
+    next_cursor: Option<String>,
+    #[serde(default)]
+    data: Vec<SnapshotEntryWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotEntryWire {
+    #[serde(alias = "path", alias = "name")]
+    key: String,
+    #[serde(default)]
+    filename: Option<String>,
+    #[serde(
+        alias = "downloadUrl",
+        alias = "url",
+        alias = "fileUrl",
+        alias = "file_url"
+    )]
+    download_url: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct SnapshotEntry {
     pub key: String,
     pub filename: String,
+    pub download_url: String,
+}
+
+impl SnapshotEntryWire {
+    fn into_snapshot(self) -> Result<SnapshotEntry> {
+        let filename = self
+            .filename
+            .or_else(|| self.key.rsplit('/').next().map(str::to_string))
+            .ok_or_else(|| {
+                TickError::Other(anyhow!("snapshot entry did not include a filename"))
+            })?;
+
+        Ok(SnapshotEntry {
+            key: self.key,
+            filename,
+            download_url: self.download_url,
+        })
+    }
 }
 
 impl PolarisClient {
@@ -125,7 +169,19 @@ impl PolarisClient {
             }
 
             let request = self.api_client.get(url).query(&params);
-            let page: SnapshotsPage = self.send_json(request, "snapshot listing failed").await?;
+            let page = self
+                .send_json::<StandardSnapshotsPageWire>(request, "snapshot listing failed")
+                .await?;
+            let page = SnapshotsPage {
+                total: page.total,
+                total_bytes: page.total_bytes.unwrap_or(0),
+                next_cursor: page.next_cursor,
+                snapshots: page
+                    .data
+                    .into_iter()
+                    .map(SnapshotEntryWire::into_snapshot)
+                    .collect::<Result<Vec<_>>>()?,
+            };
             if all.is_empty() {
                 total_bytes = page.total_bytes;
             }
@@ -134,11 +190,14 @@ impl PolarisClient {
             if let Some(next) = page.next_cursor {
                 cursor = Some(next);
             } else {
-                if page.total != all.len() && page.total != 0 {
+                if let Some(total) = page.total
+                    && total != all.len()
+                    && total != 0
+                {
                     return Err(TickError::Other(anyhow!(
                         "snapshot pagination returned {} entries but advertised {}",
                         all.len(),
-                        page.total
+                        total
                     )));
                 }
                 break;
@@ -146,39 +205,6 @@ impl PolarisClient {
         }
 
         Ok((all, total_bytes))
-    }
-
-    pub async fn fetch_download_url(&self, key: &str) -> Result<String> {
-        let url = format!("{}/snapshots/download", self.base_url);
-        let response = self
-            .authorized(self.api_client.get(url))
-            .query(&[("key", key)])
-            .send()
-            .await
-            .context("snapshot download URL request failed")
-            .map_err(TickError::Other)?;
-
-        if response.status().is_redirection() {
-            let location = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .ok_or_else(|| {
-                    TickError::Other(anyhow!("snapshot redirect missing location header"))
-                })?;
-            let value = location
-                .to_str()
-                .context("snapshot redirect location was not valid UTF-8")
-                .map_err(TickError::Other)?;
-            return Ok(value.to_string());
-        }
-
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        Err(http_error(
-            status,
-            body,
-            "snapshot download URL request failed",
-        ))
     }
 
     pub async fn download(&self, url: &str) -> Result<reqwest::Response> {

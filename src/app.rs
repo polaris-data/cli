@@ -11,7 +11,7 @@ use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::api::{CatalogExchange, PolarisClient};
 use crate::cli::{
     AccountCommand, AccountSubcommand, Cli, Command, DatasetArgs, ListCommand, ListSubcommand,
-    LocalListArgs, RemoteListArgs, SyncArgs,
+    LocalListArgs, RemoteListArgs, ResetArgs, SyncArgs,
 };
 use crate::config::{ApiKeySource, Config};
 use crate::error::{Result, TickError};
@@ -39,6 +39,10 @@ pub async fn run(cli: Cli) -> Result<u8> {
         Some(Command::List(args)) => {
             let config = Config::from_env()?;
             run_list(&config, args).await
+        }
+        Some(Command::Reset(args)) => {
+            let config = Config::from_env()?;
+            run_reset(&config, args).await
         }
         Some(Command::Sync(args)) => {
             let config = Config::from_env()?;
@@ -170,6 +174,42 @@ fn run_list_local(config: &Config, args: LocalListArgs) -> Result<u8> {
     let entries = filter_local_list_entries(entries, &filters);
     let output =
         LocalListOutput::from_entries(layout.root().display().to_string(), filters, entries);
+    emit_output(args.json, &output)?;
+    Ok(0)
+}
+
+async fn run_reset(config: &Config, args: ResetArgs) -> Result<u8> {
+    let layout = layout_for_root(config.root.clone());
+    let _guard = acquire_sync_lock(&layout)?;
+
+    let snapshot_total = layout.list_local_snapshots()?.len();
+    let daily_artifact_total = layout.list_local_daily_artifacts()?.len();
+
+    let candidate_roots = vec![
+        layout.data_root(),
+        layout.daily_root(),
+        layout.tmp_root(),
+        layout.cache_root(),
+    ];
+
+    let mut removed_roots = Vec::new();
+    for root in candidate_roots {
+        if tokio::fs::metadata(&root).await.is_ok() {
+            tokio::fs::remove_dir_all(&root)
+                .await
+                .with_context(|| format!("failed to remove {}", root.display()))
+                .map_err(TickError::Other)?;
+            removed_roots.push(root.display().to_string());
+        }
+    }
+
+    let output = ResetOutput {
+        command: "reset",
+        root: layout.root().display().to_string(),
+        snapshot_total,
+        daily_artifact_total,
+        removed_roots,
+    };
     emit_output(args.json, &output)?;
     Ok(0)
 }
@@ -477,6 +517,15 @@ struct SyncOutput {
     failed: Vec<crate::syncer::FailedDownload>,
 }
 
+#[derive(Debug, Serialize)]
+struct ResetOutput {
+    command: &'static str,
+    root: String,
+    snapshot_total: usize,
+    daily_artifact_total: usize,
+    removed_roots: Vec<String>,
+}
+
 impl SyncOutput {
     fn from_parts(
         plan: &SyncPlan,
@@ -535,16 +584,39 @@ impl HumanOutput for SyncOutput {
     }
 }
 
+impl HumanOutput for ResetOutput {
+    fn render_human(&self) -> String {
+        let mut lines = vec![
+            "reset".to_string(),
+            format!("root: {}", self.root),
+            format!("removed snapshots: {}", self.snapshot_total),
+            format!("removed daily artifacts: {}", self.daily_artifact_total),
+        ];
+        if !self.removed_roots.is_empty() {
+            lines.push("removed roots:".into());
+            for root in &self.removed_roots {
+                lines.push(format!("  {root}"));
+            }
+        }
+        lines.join("\n")
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use chrono::{TimeZone, Utc};
+    use tempfile::TempDir;
 
     use super::{
-        LocalListFilters, LocalListOutput, RemoteListFilters, RemoteListOutput, SyncOutput,
-        TimeWindow, filter_local_list_entries, filter_remote_catalog,
+        LocalListFilters, LocalListOutput, RemoteListFilters, RemoteListOutput, ResetOutput,
+        SyncOutput, TimeWindow, filter_local_list_entries, filter_remote_catalog, run_reset,
     };
     use crate::api::{CatalogAsset, CatalogExchange};
-    use crate::layout::LocalSnapshotEntry;
+    use crate::cli::ResetArgs;
+    use crate::config::Config;
+    use crate::layout::{Layout, LocalSnapshotEntry};
     use crate::syncer::FailedDownload;
     use crate::tui::RemoteDatasetEntry;
 
@@ -717,5 +789,94 @@ mod tests {
             json,
             "{\"command\":\"sync\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/tick\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"materialized_days_total\":1,\"materialization_incomplete_days_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
         );
+    }
+
+    #[test]
+    fn reset_json_shape_is_stable() {
+        let output = ResetOutput {
+            command: "reset",
+            root: "/tmp/tick".into(),
+            snapshot_total: 2,
+            daily_artifact_total: 1,
+            removed_roots: vec![
+                "/tmp/tick/data".into(),
+                "/tmp/tick/daily".into(),
+                "/tmp/tick/tmp".into(),
+                "/tmp/tick/cache".into(),
+            ],
+        };
+        let json = serde_json::to_string(&output).expect("json");
+        assert_eq!(
+            json,
+            "{\"command\":\"reset\",\"root\":\"/tmp/tick\",\"snapshot_total\":2,\"daily_artifact_total\":1,\"removed_roots\":[\"/tmp/tick/data\",\"/tmp/tick/daily\",\"/tmp/tick/tmp\",\"/tmp/tick/cache\"]}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reset_removes_local_dataset_roots() {
+        let tempdir = TempDir::new().expect("tempdir");
+        let root = tempdir.path().to_path_buf();
+        let config = Config {
+            base_url: "http://example.test".into(),
+            api_key: None,
+            api_key_source: None,
+            root: root.clone(),
+            concurrency: 4,
+            timeout: std::time::Duration::from_secs(5),
+        };
+        let layout = Layout::new(root.clone());
+
+        let snapshot_path = layout
+            .data_path_for_key("events/aster/BTCUSDT/aster_BTCUSDT_2026-06-01.jsonl.zst")
+            .expect("snapshot path");
+        std::fs::create_dir_all(snapshot_path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&snapshot_path, b"snapshot").expect("write snapshot");
+
+        let daily_path = layout.daily_path_for_dataset_day(
+            "aster",
+            "BTCUSDT",
+            chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+        );
+        std::fs::create_dir_all(daily_path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&daily_path, b"daily").expect("write daily");
+
+        let tmp_path =
+            layout.temp_path_for_key("events/aster/BTCUSDT/aster_BTCUSDT_2026-06-01.jsonl.zst");
+        std::fs::create_dir_all(tmp_path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&tmp_path, b"partial").expect("write tmp");
+
+        let cache_path = layout.catalog_cache_path("aster", "BTCUSDT");
+        std::fs::create_dir_all(cache_path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&cache_path, b"cache").expect("write cache");
+
+        let exit_code = run_reset(&config, ResetArgs { json: false })
+            .await
+            .expect("reset");
+        assert_eq!(exit_code, 0);
+
+        assert!(!layout.data_root().exists());
+        assert!(!layout.daily_root().exists());
+        assert!(!layout.tmp_root().exists());
+        assert!(!layout.cache_root().exists());
+        assert!(layout.root().exists());
+        assert_eq!(layout.list_local_snapshots().expect("snapshots").len(), 0);
+        assert_eq!(
+            layout
+                .list_local_daily_artifacts()
+                .expect("daily artifacts")
+                .len(),
+            0
+        );
+
+        let remaining_roots = [
+            layout.data_root(),
+            layout.daily_root(),
+            layout.tmp_root(),
+            layout.cache_root(),
+        ]
+        .into_iter()
+        .filter(|path| path.exists())
+        .collect::<BTreeSet<_>>();
+        assert!(remaining_roots.is_empty());
     }
 }

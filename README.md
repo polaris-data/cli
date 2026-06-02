@@ -1,11 +1,12 @@
 # tick
 
-`tick` is a Rust CLI for syncing Polaris snapshot files to a local canonical dataset tree.
+`tick` is a Rust CLI for syncing Polaris standardized event snapshot files to a local canonical dataset tree.
 
 It is intentionally narrow in v1:
 - bare `tick` opens the remote dataset browser TUI in a real terminal.
 - `list` prints remote exchange and asset datasets in plain CLI output.
 - `list local` shows the local snapshots currently present under the managed dataset root.
+- `reset` clears all local dataset state managed by `tick`.
 - `sync` downloads missing snapshot files for a requested remote time range.
 
 ## Requirements
@@ -122,6 +123,7 @@ Use the compiled binary directly:
 ./target/release/tick --help
 ./target/release/tick list --help
 ./target/release/tick list local --help
+./target/release/tick reset --help
 ./target/release/tick sync --help
 ```
 
@@ -141,6 +143,7 @@ tick account set-key
 tick account status
 tick list [--exchange <EXCHANGE>] [--asset <ASSET>] [--search <QUERY>] [--limit <N>] [--json]
 tick list local [--exchange <EXCHANGE>] [--asset <ASSET>] [--date <YYYY-MM-DD>] [--json]
+tick reset [--json]
 tick sync --exchange <EXCHANGE> --asset <ASSET> --from <FROM> --to <TO> [--json] [--concurrency <N>]
 ```
 
@@ -205,7 +208,7 @@ Example:
 
 ### `list local`
 
-Lists local snapshots already stored under `data/` in the managed root. Snapshot metadata is deduced from the file path and filename pattern when possible.
+Lists local snapshots already stored under `data/` in the managed root. Snapshot metadata is deduced from the file path and filename pattern when possible, including daily snapshot files where the UTC date is encoded in the filename instead of a directory segment.
 
 Optional filters:
 - `--exchange <EXCHANGE>`
@@ -216,6 +219,22 @@ Example:
 
 ```bash
 ./target/debug/tick list local --json
+```
+
+### `reset`
+
+Removes all local dataset state managed by `tick` under the configured root. This clears `data/`, `daily/`, `tmp/`, and `cache/`, but leaves the root directory and account credentials intact.
+
+Example:
+
+```bash
+./target/debug/tick reset
+```
+
+JSON output:
+
+```bash
+./target/debug/tick reset --json
 ```
 
 Filtered example:
@@ -229,9 +248,9 @@ Filtered example:
 
 ### `sync`
 
-Fetches the remote snapshot catalog for the requested range, compares it to the local dataset tree, then downloads only the missing snapshots.
+Fetches the remote standardized snapshot catalog for the requested range, compares it to the local dataset tree, then downloads only the missing snapshots.
 
-After raw chunk sync completes, `tick` also automatically materializes full-day local files under `daily/` for any UTC day in the effective sync range that is fully present locally.
+After sync completes, `tick` also automatically materializes full-day local files under `daily/` for any UTC day in the effective sync range that is fully present locally. When Polaris serves a day-level standardized snapshot directly, that file is reused as the day artifact.
 
 Example:
 
@@ -311,6 +330,12 @@ Example snapshot path:
 
 ```text
 data/bronze/aster/BTCUSDT/2026-06-01/aster_BTCUSDT_s20260601T000000Z_e20260601T000959Z.jsonl.zst
+```
+
+Example day-level snapshot path:
+
+```text
+data/events/aster/BTCUSDT/aster_BTCUSDT_2026-06-01.jsonl.zst
 ```
 
 Example daily materialized path:

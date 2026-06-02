@@ -11,6 +11,7 @@ pub struct Cli {
 pub enum Command {
     Account(AccountCommand),
     List(ListCommand),
+    Reset(ResetArgs),
     Sync(SyncArgs),
 }
 
@@ -85,4 +86,10 @@ pub struct SyncArgs {
     pub dataset: DatasetArgs,
     #[arg(long)]
     pub concurrency: Option<usize>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ResetArgs {
+    #[arg(long)]
+    pub json: bool,
 }

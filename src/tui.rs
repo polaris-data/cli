@@ -21,7 +21,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, error::TryRecvError, unbounded_channe
 use crate::api::{PolarisClient, SnapshotEntry};
 use crate::config::Config;
 use crate::error::{Result, TickError};
-use crate::layout::{LocalDailyArtifactEntry, LocalSnapshotEntry};
+use crate::layout::{LocalDailyArtifactEntry, LocalSnapshotEntry, infer_snapshot_date_from_key};
 use crate::materialize::materialize_range_days;
 use crate::planner::{TimeWindow, build_sync_plan};
 use crate::syncer::{SyncProgressEvent, acquire_sync_lock, execute_sync_with_progress};
@@ -1094,10 +1094,7 @@ fn select_initial_day(days: &[DayCoverage]) -> usize {
 }
 
 fn snapshot_date_from_key(key: &str) -> Option<NaiveDate> {
-    key.split('/')
-        .rev()
-        .nth(1)
-        .and_then(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+    infer_snapshot_date_from_key(key)
 }
 
 fn group_local_daily_artifacts(entries: Vec<LocalDailyArtifactEntry>) -> BTreeSet<String> {
@@ -1290,18 +1287,22 @@ mod tests {
             SnapshotEntry {
                 key: "bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into(),
                 filename: "a.jsonl.zst".into(),
+                download_url: "http://example.test/a".into(),
             },
             SnapshotEntry {
                 key: "bronze/aster/BTCUSDT/2026-06-01/b.jsonl.zst".into(),
                 filename: "b.jsonl.zst".into(),
+                download_url: "http://example.test/b".into(),
             },
             SnapshotEntry {
                 key: "bronze/aster/BTCUSDT/2026-06-02/c.jsonl.zst".into(),
                 filename: "c.jsonl.zst".into(),
+                download_url: "http://example.test/c".into(),
             },
             SnapshotEntry {
                 key: "bronze/aster/BTCUSDT/2026-06-03/d.jsonl.zst".into(),
                 filename: "d.jsonl.zst".into(),
+                download_url: "http://example.test/d".into(),
             },
         ];
         let local = vec![

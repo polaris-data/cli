@@ -54,16 +54,19 @@ impl Layout {
         let mut hasher = Sha256::new();
         hasher.update(key.as_bytes());
         let digest = format!("{:x}", hasher.finalize());
-        self.root.join("tmp").join(format!("{digest}.part"))
+        self.tmp_root().join(format!("{digest}.part"))
     }
 
     pub fn lock_path(&self) -> PathBuf {
         self.root.join("locks").join("sync.lock")
     }
 
+    pub fn cache_root(&self) -> PathBuf {
+        self.root.join("cache")
+    }
+
     pub fn catalog_cache_path(&self, exchange: &str, asset: &str) -> PathBuf {
-        self.root
-            .join("cache")
+        self.cache_root()
             .join("catalog")
             .join(exchange)
             .join(format!("{asset}.json"))
@@ -75,6 +78,10 @@ impl Layout {
 
     pub fn daily_root(&self) -> PathBuf {
         self.root.join("daily")
+    }
+
+    pub fn tmp_root(&self) -> PathBuf {
+        self.root.join("tmp")
     }
 
     pub fn daily_path_for_dataset_day(
@@ -102,7 +109,7 @@ impl Layout {
         hasher.update(b":");
         hasher.update(date.to_string().as_bytes());
         let digest = format!("{:x}", hasher.finalize());
-        self.root.join("tmp").join(format!("daily-{digest}.part"))
+        self.tmp_root().join(format!("daily-{digest}.part"))
     }
 
     pub fn list_local_snapshots(&self) -> Result<Vec<LocalSnapshotEntry>> {
@@ -196,22 +203,7 @@ fn collect_snapshot_files(
             .file_name()
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_default();
-        let segments = key.split('/').collect::<Vec<_>>();
-        let date = if segments.len() >= 4 {
-            Some(segments[segments.len() - 2].to_string())
-        } else {
-            None
-        };
-        let asset = if segments.len() >= 3 {
-            Some(segments[segments.len() - 3].to_string())
-        } else {
-            None
-        };
-        let exchange = if segments.len() >= 4 {
-            Some(segments[segments.len() - 4].to_string())
-        } else {
-            None
-        };
+        let (exchange, asset, date) = infer_snapshot_identity(&key, &filename);
         let (start, end) = parse_snapshot_times(&filename);
 
         files.push(LocalSnapshotEntry {
@@ -227,6 +219,15 @@ fn collect_snapshot_files(
     }
 
     Ok(())
+}
+
+pub fn infer_snapshot_date_from_key(key: &str) -> Option<NaiveDate> {
+    let segments = key.split('/').collect::<Vec<_>>();
+    infer_date_from_segments(&segments).or_else(|| {
+        segments
+            .last()
+            .and_then(|filename| infer_date_from_text(filename))
+    })
 }
 
 fn collect_daily_artifacts(
@@ -304,13 +305,83 @@ fn parse_snapshot_timestamp(raw: &str) -> Option<DateTime<Utc>> {
     Some(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
 }
 
+fn infer_snapshot_identity(
+    key: &str,
+    filename: &str,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let segments = key.split('/').collect::<Vec<_>>();
+    if segments.is_empty() {
+        return (None, None, None);
+    }
+
+    if let Some((index, date)) = infer_date_segment_index(&segments) {
+        let exchange = index
+            .checked_sub(2)
+            .and_then(|value| segments.get(value))
+            .map(|value| (*value).to_string());
+        let asset = index
+            .checked_sub(1)
+            .and_then(|value| segments.get(value))
+            .map(|value| (*value).to_string());
+        return (exchange, asset, Some(date.to_string()));
+    }
+
+    if let Some(date) = infer_date_from_text(filename) {
+        let exchange = segments
+            .len()
+            .checked_sub(3)
+            .and_then(|value| segments.get(value))
+            .map(|value| (*value).to_string());
+        let asset = segments
+            .len()
+            .checked_sub(2)
+            .and_then(|value| segments.get(value))
+            .map(|value| (*value).to_string());
+        return (exchange, asset, Some(date.to_string()));
+    }
+
+    let exchange = segments
+        .len()
+        .checked_sub(4)
+        .and_then(|value| segments.get(value))
+        .map(|value| (*value).to_string());
+    let asset = segments
+        .len()
+        .checked_sub(3)
+        .and_then(|value| segments.get(value))
+        .map(|value| (*value).to_string());
+    (exchange, asset, None)
+}
+
+fn infer_date_from_segments(segments: &[&str]) -> Option<NaiveDate> {
+    infer_date_segment_index(segments).map(|(_, date)| date)
+}
+
+fn infer_date_segment_index(segments: &[&str]) -> Option<(usize, NaiveDate)> {
+    segments
+        .iter()
+        .enumerate()
+        .find_map(|(index, segment)| infer_date_from_text(segment).map(|date| (index, date)))
+}
+
+fn infer_date_from_text(text: &str) -> Option<NaiveDate> {
+    text.split(|ch: char| !(ch.is_ascii_digit() || ch == '-'))
+        .find_map(|token| {
+            if token.len() == 10 {
+                NaiveDate::parse_from_str(token, "%Y-%m-%d").ok()
+            } else {
+                None
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use chrono::{TimeZone, Utc};
 
-    use super::{Layout, LocalDailyArtifactEntry};
+    use super::{Layout, LocalDailyArtifactEntry, infer_snapshot_date_from_key};
 
     #[test]
     fn remote_key_maps_to_canonical_path() {
@@ -373,6 +444,38 @@ mod tests {
                 asset: "BTCUSDT".into(),
                 date: "2026-06-01".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn local_listing_infers_metadata_from_daily_snapshot_filename() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let layout = Layout::new(tempdir.path().to_path_buf());
+        let file = layout
+            .data_path_for_key("events/aster/BTCUSDT/aster_BTCUSDT_2026-06-01.jsonl.zst")
+            .expect("path");
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&file, b"snapshot").expect("write");
+
+        let entries = layout.list_local_snapshots().expect("entries");
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.exchange.as_deref(), Some("aster"));
+        assert_eq!(entry.asset.as_deref(), Some("BTCUSDT"));
+        assert_eq!(entry.date.as_deref(), Some("2026-06-01"));
+        assert_eq!(entry.start, None);
+        assert_eq!(entry.end, None);
+    }
+
+    #[test]
+    fn snapshot_date_inference_supports_directory_and_filename_dates() {
+        assert_eq!(
+            infer_snapshot_date_from_key("bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst"),
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap())
+        );
+        assert_eq!(
+            infer_snapshot_date_from_key("events/aster/BTCUSDT/aster_BTCUSDT_2026-06-02.jsonl.zst"),
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 2).unwrap())
         );
     }
 }
