@@ -361,19 +361,18 @@ cargo test
 
 ## Release Process
 
-`tick` release assets are built from Git tags by GitHub Actions.
+`tick` release assets are built by a single GitHub Actions workflow from the crate version in `Cargo.toml`.
 
 Maintainership flow:
 
 1. Update the crate version in `Cargo.toml`.
-2. Commit the release change.
-3. Create a matching tag, for example `git tag v0.1.0`.
-4. Push the commit and tag: `git push origin main --tags`.
-5. GitHub Actions publishes:
+2. Commit the release change and push it to `main`.
+3. The release workflow detects the version bump, creates the matching tag, and publishes the release.
+4. GitHub Actions publishes:
    - `tick-v{version}-x86_64-apple-darwin.tar.gz`
    - `tick-v{version}-aarch64-apple-darwin.tar.gz`
    - `tick-v{version}-x86_64-unknown-linux-gnu.tar.gz`
    - `tick-v{version}-aarch64-unknown-linux-gnu.tar.gz`
    - `tick-v{version}-checksums.txt`
 
-The release workflow fails if the git tag does not match the version declared in `Cargo.toml`.
+The same workflow also supports manual tag pushes and `workflow_dispatch`, and it still validates that the release tag matches the version declared in `Cargo.toml`.
