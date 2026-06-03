@@ -45,7 +45,6 @@ struct SnapshotsPage {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct StandardSnapshotsPageWire {
     total: Option<usize>,
     #[serde(default)]
@@ -53,6 +52,8 @@ struct StandardSnapshotsPageWire {
     next_cursor: Option<String>,
     #[serde(default)]
     data: Vec<SnapshotEntryWire>,
+    #[serde(default)]
+    snapshots: Vec<SnapshotEntryWire>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,20 +62,12 @@ struct SnapshotEntryWire {
     key: String,
     #[serde(default)]
     filename: Option<String>,
-    #[serde(
-        alias = "downloadUrl",
-        alias = "url",
-        alias = "fileUrl",
-        alias = "file_url"
-    )]
-    download_url: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct SnapshotEntry {
     pub key: String,
     pub filename: String,
-    pub download_url: String,
 }
 
 impl SnapshotEntryWire {
@@ -89,7 +82,6 @@ impl SnapshotEntryWire {
         Ok(SnapshotEntry {
             key: self.key,
             filename,
-            download_url: self.download_url,
         })
     }
 }
@@ -172,12 +164,15 @@ impl PolarisClient {
             let page = self
                 .send_json::<StandardSnapshotsPageWire>(request, "snapshot listing failed")
                 .await?;
+            let mut snapshot_entries = page.snapshots;
+            if !page.data.is_empty() {
+                snapshot_entries.extend(page.data);
+            }
             let page = SnapshotsPage {
                 total: page.total,
                 total_bytes: page.total_bytes.unwrap_or(0),
                 next_cursor: page.next_cursor,
-                snapshots: page
-                    .data
+                snapshots: snapshot_entries
                     .into_iter()
                     .map(SnapshotEntryWire::into_snapshot)
                     .collect::<Result<Vec<_>>>()?,
@@ -207,13 +202,17 @@ impl PolarisClient {
         Ok((all, total_bytes))
     }
 
-    pub async fn download(&self, url: &str) -> Result<reqwest::Response> {
+    pub async fn download_snapshot(&self, key: &str, filename: &str) -> Result<reqwest::Response> {
+        let url = format!("{}/snapshots/download", self.base_url);
         let response = self
-            .download_client
-            .get(url)
+            .authorized(
+                self.download_client
+                    .get(url)
+                    .query(&[("key", key), ("filename", filename)]),
+            )
             .send()
             .await
-            .with_context(|| format!("download request failed for {url}"))
+            .with_context(|| format!("snapshot download request failed for {key}"))
             .map_err(TickError::Other)?;
 
         let status = response.status();
@@ -247,12 +246,33 @@ impl PolarisClient {
             let body = response.text().await.unwrap_or_default();
             return Err(http_error(status, body, context));
         }
-        response
-            .json::<T>()
+        let body = response
+            .text()
             .await
             .with_context(|| context.to_string())
+            .map_err(TickError::Other)?;
+        serde_json::from_str::<T>(&body)
+            .with_context(|| {
+                format!(
+                    "{context}: failed to decode JSON response: {}",
+                    body_snippet(&body)
+                )
+            })
             .map_err(TickError::Other)
     }
+}
+
+fn body_snippet(body: &str) -> String {
+    const MAX_CHARS: usize = 240;
+    let mut snippet = body.trim().chars().take(MAX_CHARS + 1).collect::<String>();
+    if snippet.is_empty() {
+        return "<empty body>".into();
+    }
+    if snippet.chars().count() > MAX_CHARS {
+        snippet = snippet.chars().take(MAX_CHARS).collect::<String>();
+        snippet.push_str("...");
+    }
+    snippet
 }
 
 fn http_error(status: StatusCode, body: String, context: &str) -> TickError {
@@ -270,4 +290,68 @@ fn http_error(status: StatusCode, body: String, context: &str) -> TickError {
 
 fn to_rfc3339(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SnapshotEntryWire, StandardSnapshotsPageWire};
+
+    #[test]
+    fn parses_current_snapshots_shape() {
+        let page: StandardSnapshotsPageWire = serde_json::from_str(
+            r#"{
+                "exchange":"aster",
+                "asset":"ASTERUSDT",
+                "total":1,
+                "total_bytes":123,
+                "limit":1000,
+                "has_more":false,
+                "next_cursor":null,
+                "snapshots":[
+                    {
+                        "date":"2026-06-01",
+                        "key":"snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst",
+                        "filename":"aster_ASTERUSDT_2026-06-01_standard.jsonl.zst"
+                    }
+                ]
+            }"#,
+        )
+        .expect("page should parse");
+
+        assert_eq!(page.snapshots.len(), 1);
+        let snapshot = page
+            .snapshots
+            .into_iter()
+            .next()
+            .expect("snapshot entry")
+            .into_snapshot()
+            .expect("snapshot should map");
+        assert_eq!(
+            snapshot.key,
+            "snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst"
+        );
+        assert_eq!(
+            snapshot.filename,
+            "aster_ASTERUSDT_2026-06-01_standard.jsonl.zst"
+        );
+    }
+
+    #[test]
+    fn ignores_legacy_inline_download_urls() {
+        let snapshot: SnapshotEntryWire = serde_json::from_str(
+            r#"{
+                "key":"bronze/aster/ASTERUSDT/2026-06-01/file.jsonl.zst",
+                "filename":"file.jsonl.zst",
+                "downloadUrl":"https://example.test/file.jsonl.zst"
+            }"#,
+        )
+        .expect("snapshot should parse");
+
+        let snapshot = snapshot.into_snapshot().expect("snapshot should map");
+        assert_eq!(
+            snapshot.key,
+            "bronze/aster/ASTERUSDT/2026-06-01/file.jsonl.zst"
+        );
+        assert_eq!(snapshot.filename, "file.jsonl.zst");
+    }
 }

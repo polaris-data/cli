@@ -41,6 +41,12 @@ struct SnapshotsQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct SnapshotDownloadQuery {
+    key: String,
+    filename: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct CatalogQuery {
     exchange: Option<String>,
     asset: Option<String>,
@@ -51,7 +57,7 @@ struct SnapshotsResponse {
     total: usize,
     total_bytes: u64,
     next_cursor: Option<String>,
-    data: Vec<SnapshotEntry>,
+    snapshots: Vec<SnapshotEntry>,
 }
 
 #[tokio::test]
@@ -285,14 +291,10 @@ impl SnapshotFixture {
             vec![SnapshotEntry {
                 key: key_a.clone(),
                 filename: "a.jsonl.zst".into(),
-                download_url: "__BASE_URL__/files/bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst"
-                    .into(),
             }],
             vec![SnapshotEntry {
                 key: key_b.clone(),
                 filename: "b.jsonl.zst".into(),
-                download_url: "__BASE_URL__/files/bronze/aster/BTCUSDT/2026-06-01/b.jsonl.zst"
-                    .into(),
             }],
         ];
         let files = HashMap::from([
@@ -348,6 +350,7 @@ impl TestServer {
         let app = Router::new()
             .route("/catalog", get(handle_catalog))
             .route("/snapshots", get(handle_snapshots))
+            .route("/snapshots/download", get(handle_snapshot_download))
             .route("/files/{*key}", get(handle_file))
             .with_state(state);
 
@@ -417,19 +420,7 @@ async fn handle_snapshots(
         Some("page2") => 1,
         _ => 999,
     };
-    let snapshots = state
-        .pages
-        .get(page_index)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|mut snapshot| {
-            snapshot.download_url = snapshot
-                .download_url
-                .replace("__BASE_URL__", &state.base_url);
-            snapshot
-        })
-        .collect::<Vec<_>>();
+    let snapshots = state.pages.get(page_index).cloned().unwrap_or_default();
     let next_cursor = if page_index + 1 < state.pages.len() {
         Some("page2".to_string())
     } else {
@@ -439,8 +430,21 @@ async fn handle_snapshots(
         total: state.pages.iter().map(Vec::len).sum(),
         total_bytes: state.total_bytes,
         next_cursor,
-        data: snapshots,
+        snapshots,
     })
+}
+
+async fn handle_snapshot_download(
+    State(state): State<TestServerState>,
+    Query(query): Query<SnapshotDownloadQuery>,
+) -> Response {
+    let _ = query.filename.as_deref();
+    if !state.files.contains_key(&query.key) {
+        return (StatusCode::NOT_FOUND, "missing").into_response();
+    }
+
+    axum::response::Redirect::temporary(&format!("{}/files/{}", state.base_url, query.key))
+        .into_response()
 }
 
 async fn handle_file(State(state): State<TestServerState>, Path(key): Path<String>) -> Response {

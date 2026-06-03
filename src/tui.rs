@@ -82,11 +82,14 @@ struct ActiveDaySync {
     local_present: usize,
     downloaded: usize,
     failed: usize,
+    download_bytes: u64,
+    download_total_bytes: Option<u64>,
     phase: SyncPhase,
+    deferred_update: Option<DaySyncUpdate>,
     receiver: UnboundedReceiver<DaySyncUpdate>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncPhase {
     Downloading,
     Materializing,
@@ -94,7 +97,16 @@ enum SyncPhase {
 
 #[derive(Debug)]
 enum DaySyncUpdate {
-    Downloaded,
+    Started {
+        total_bytes: Option<u64>,
+    },
+    Progress {
+        downloaded_bytes: u64,
+        total_bytes: Option<u64>,
+    },
+    Downloaded {
+        total_bytes: u64,
+    },
     Failed,
     Materializing,
     Finished {
@@ -384,7 +396,10 @@ impl RemoteListTui {
             local_present,
             downloaded: 0,
             failed: 0,
+            download_bytes: 0,
+            download_total_bytes: None,
             phase: SyncPhase::Downloading,
+            deferred_update: None,
             receiver: rx,
         });
         self.status_message = Some(format!("syncing {}", selected_date));
@@ -396,22 +411,60 @@ impl RemoteListTui {
 
         let mut finished: Option<(String, NaiveDate, String)> = None;
         if let Some(sync) = &mut self.active_sync {
+            let mut saw_progress_update = false;
             loop {
-                match sync.receiver.try_recv() {
-                    Ok(DaySyncUpdate::Downloaded) => {
+                let update = if let Some(update) = sync.deferred_update.take() {
+                    Ok(update)
+                } else {
+                    sync.receiver.try_recv()
+                };
+                match update {
+                    Ok(DaySyncUpdate::Started { total_bytes }) => {
+                        sync.download_bytes = 0;
+                        sync.download_total_bytes = total_bytes;
+                        saw_progress_update = true;
+                    }
+                    Ok(DaySyncUpdate::Progress {
+                        downloaded_bytes,
+                        total_bytes,
+                    }) => {
+                        sync.download_bytes = downloaded_bytes;
+                        if total_bytes.is_some() {
+                            sync.download_total_bytes = total_bytes;
+                        }
+                        saw_progress_update = true;
+                    }
+                    Ok(DaySyncUpdate::Downloaded { total_bytes }) => {
                         sync.downloaded += 1;
+                        sync.download_bytes = total_bytes;
+                        sync.download_total_bytes = Some(total_bytes);
+                        saw_progress_update = true;
                     }
                     Ok(DaySyncUpdate::Failed) => {
                         sync.failed += 1;
+                        saw_progress_update = true;
                     }
                     Ok(DaySyncUpdate::Materializing) => {
+                        if saw_progress_update {
+                            sync.deferred_update = Some(DaySyncUpdate::Materializing);
+                            break;
+                        }
                         sync.phase = SyncPhase::Materializing;
+                        break;
                     }
                     Ok(DaySyncUpdate::Finished {
                         downloaded,
                         failed,
                         materialized_days,
                     }) => {
+                        if saw_progress_update {
+                            sync.deferred_update = Some(DaySyncUpdate::Finished {
+                                downloaded,
+                                failed,
+                                materialized_days,
+                            });
+                            break;
+                        }
                         finished = Some((
                             sync.dataset.clone(),
                             sync.date,
@@ -423,6 +476,10 @@ impl RemoteListTui {
                         break;
                     }
                     Ok(DaySyncUpdate::Error(message)) => {
+                        if saw_progress_update {
+                            sync.deferred_update = Some(DaySyncUpdate::Error(message));
+                            break;
+                        }
                         finished = Some((
                             sync.dataset.clone(),
                             sync.date,
@@ -457,12 +514,26 @@ impl RemoteListTui {
             self.status_message = Some(status);
         } else if let Some(sync) = &self.active_sync {
             self.status_message = Some(match sync.phase {
-                SyncPhase::Downloading => format!(
-                    "syncing {} ({}/{})",
-                    sync.date,
-                    sync.local_present + sync.downloaded,
-                    sync.remote_total
-                ),
+                SyncPhase::Downloading => {
+                    let progress =
+                        format_byte_progress(sync.download_bytes, sync.download_total_bytes);
+                    if progress.is_empty() {
+                        format!(
+                            "syncing {} ({}/{})",
+                            sync.date,
+                            sync.local_present + sync.downloaded,
+                            sync.remote_total
+                        )
+                    } else {
+                        format!(
+                            "syncing {} ({}/{}, {})",
+                            sync.date,
+                            sync.local_present + sync.downloaded,
+                            sync.remote_total,
+                            progress
+                        )
+                    }
+                }
                 SyncPhase::Materializing => format!("materializing {}", sync.date),
             });
         }
@@ -513,7 +584,20 @@ impl RemoteListTui {
 impl From<SyncProgressEvent> for DaySyncUpdate {
     fn from(value: SyncProgressEvent) -> Self {
         match value {
-            SyncProgressEvent::Downloaded { .. } => DaySyncUpdate::Downloaded,
+            SyncProgressEvent::Started { total_bytes, .. } => {
+                DaySyncUpdate::Started { total_bytes }
+            }
+            SyncProgressEvent::Progress {
+                downloaded_bytes,
+                total_bytes,
+                ..
+            } => DaySyncUpdate::Progress {
+                downloaded_bytes,
+                total_bytes,
+            },
+            SyncProgressEvent::Downloaded { total_bytes, .. } => {
+                DaySyncUpdate::Downloaded { total_bytes }
+            }
             SyncProgressEvent::Failed { .. } => DaySyncUpdate::Failed,
         }
     }
@@ -797,7 +881,7 @@ fn render_dataset_view(
         .constraints([
             Constraint::Length(6),
             Constraint::Min(8),
-            Constraint::Length(10),
+            Constraint::Length(12),
         ])
         .split(frame.area());
 
@@ -956,6 +1040,11 @@ fn render_selected_day_summary(
     let remote_window = format_snapshot_window(&day.remote_keys);
     let local_window = format_snapshot_window(&day.local_keys);
     let completion_bar = render_completion_bar(local_total, remote_total, 24);
+    let byte_progress = active_sync
+        .filter(|sync| sync.dataset == view.dataset.dataset && sync.date == day.date)
+        .map(|sync| format_byte_progress(sync.download_bytes, sync.download_total_bytes))
+        .filter(|progress| !progress.is_empty())
+        .unwrap_or_else(|| "-".to_string());
 
     Paragraph::new(vec![
         Line::from(vec![Span::styled(
@@ -967,6 +1056,7 @@ fn render_selected_day_summary(
         Line::from(format!("remote snapshots: {}", remote_total)),
         Line::from(format!("local snapshots: {}", local_total)),
         Line::from(format!("missing snapshots: {}", missing_total)),
+        Line::from(format!("download bytes: {}", byte_progress)),
         Line::from(format!("remote window: {}", remote_window)),
         Line::from(format!("local window: {}", local_window)),
         Line::from(format!(
@@ -1112,6 +1202,43 @@ fn compact_count(count: usize) -> String {
     }
 }
 
+fn format_byte_progress(downloaded_bytes: u64, total_bytes: Option<u64>) -> String {
+    match total_bytes {
+        Some(total_bytes) if total_bytes > 0 => {
+            format!(
+                "{} / {}",
+                format_bytes(downloaded_bytes.min(total_bytes)),
+                format_bytes(total_bytes)
+            )
+        }
+        Some(_) | None if downloaded_bytes > 0 => format_bytes(downloaded_bytes),
+        _ => String::new(),
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = UNITS[0];
+    for candidate in UNITS {
+        unit = candidate;
+        if value < 1024.0 || candidate == UNITS[UNITS.len() - 1] {
+            break;
+        }
+        value /= 1024.0;
+    }
+
+    if unit == "B" {
+        format!("{bytes} {unit}")
+    } else if value >= 100.0 {
+        format!("{value:.0} {unit}")
+    } else if value >= 10.0 {
+        format!("{value:.1} {unit}")
+    } else {
+        format!("{value:.2} {unit}")
+    }
+}
+
 fn spinner_frame(tick: usize) -> &'static str {
     match tick % 4 {
         0 => "|",
@@ -1221,14 +1348,17 @@ fn parse_snapshot_timestamp(raw: &str) -> Option<DateTime<Utc>> {
 mod tests {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
+    use std::time::Duration;
 
+    use chrono::NaiveDate;
     use chrono::{TimeZone, Utc};
+    use tokio::sync::mpsc::unbounded_channel;
 
     use super::{
-        RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed, build_day_coverages,
-        diff_missing_snapshot_keys,
+        ActiveDaySync, DatasetView, DaySyncUpdate, RemoteDatasetEntry, RemoteListTui,
+        RemoteTuiSeed, SyncPhase, build_day_coverages, diff_missing_snapshot_keys,
     };
-    use crate::api::SnapshotEntry;
+    use crate::api::{PolarisClient, SnapshotEntry};
     use crate::layout::LocalSnapshotEntry;
 
     #[test]
@@ -1287,22 +1417,18 @@ mod tests {
             SnapshotEntry {
                 key: "bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into(),
                 filename: "a.jsonl.zst".into(),
-                download_url: "http://example.test/a".into(),
             },
             SnapshotEntry {
                 key: "bronze/aster/BTCUSDT/2026-06-01/b.jsonl.zst".into(),
                 filename: "b.jsonl.zst".into(),
-                download_url: "http://example.test/b".into(),
             },
             SnapshotEntry {
                 key: "bronze/aster/BTCUSDT/2026-06-02/c.jsonl.zst".into(),
                 filename: "c.jsonl.zst".into(),
-                download_url: "http://example.test/c".into(),
             },
             SnapshotEntry {
                 key: "bronze/aster/BTCUSDT/2026-06-03/d.jsonl.zst".into(),
                 filename: "d.jsonl.zst".into(),
-                download_url: "http://example.test/d".into(),
             },
         ];
         let local = vec![
@@ -1328,5 +1454,113 @@ mod tests {
         assert_eq!(days[1].missing_keys.len(), 0);
         assert_eq!(days[2].missing_keys.len(), 1);
         assert_eq!(days[3].remote_keys.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn sync_updates_do_not_skip_progress_or_materializing_frames() {
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let dataset = RemoteDatasetEntry {
+            exchange: "aster".into(),
+            asset: "ASTERUSDT".into(),
+            start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+            end: Utc.with_ymd_and_hms(2026, 6, 1, 23, 59, 59).unwrap(),
+            source: Some("manifest".into()),
+            dataset: "aster:ASTERUSDT".into(),
+        };
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = RemoteListTui::new(
+            vec![dataset.clone()],
+            Vec::<LocalSnapshotEntry>::new(),
+            Vec::new(),
+            tempdir.path().to_path_buf(),
+            4,
+            RemoteTuiSeed::default(),
+        );
+        app.mode = super::ViewMode::Dataset(DatasetView {
+            dataset: dataset.clone(),
+            days: build_day_coverages(
+                vec![SnapshotEntry {
+                    key: "snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst".into(),
+                    filename: "aster_ASTERUSDT_2026-06-01_standard.jsonl.zst".into(),
+                }],
+                &[],
+                date,
+                date,
+                &dataset.dataset,
+                &BTreeSet::new(),
+            ),
+            selected_day: 0,
+        });
+        let (tx, rx) = unbounded_channel();
+        tx.send(DaySyncUpdate::Started {
+            total_bytes: Some(2048),
+        })
+        .expect("started");
+        tx.send(DaySyncUpdate::Progress {
+            downloaded_bytes: 1024,
+            total_bytes: Some(2048),
+        })
+        .expect("progress");
+        tx.send(DaySyncUpdate::Downloaded { total_bytes: 2048 })
+            .expect("downloaded");
+        tx.send(DaySyncUpdate::Materializing)
+            .expect("materializing");
+        tx.send(DaySyncUpdate::Finished {
+            downloaded: 1,
+            failed: 0,
+            materialized_days: 1,
+        })
+        .expect("finished");
+        drop(tx);
+        app.active_sync = Some(ActiveDaySync {
+            dataset: dataset.dataset.clone(),
+            date,
+            remote_total: 1,
+            local_present: 0,
+            downloaded: 0,
+            failed: 0,
+            download_bytes: 0,
+            download_total_bytes: None,
+            phase: SyncPhase::Downloading,
+            deferred_update: None,
+            receiver: rx,
+        });
+        let client = PolarisClient::new(
+            "https://api.polaris.supply".into(),
+            None,
+            Duration::from_secs(1),
+        )
+        .expect("client");
+
+        app.pump_sync_updates(&client).await.expect("first pump");
+        let sync = app.active_sync.as_ref().expect("sync still active");
+        assert_eq!(sync.downloaded, 1);
+        assert_eq!(sync.download_bytes, 2048);
+        assert_eq!(sync.download_total_bytes, Some(2048));
+        assert_eq!(sync.phase, SyncPhase::Downloading);
+        assert!(matches!(
+            sync.deferred_update,
+            Some(DaySyncUpdate::Materializing)
+        ));
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("syncing 2026-06-01 (1/1, 2.00 KiB / 2.00 KiB)")
+        );
+
+        app.pump_sync_updates(&client).await.expect("second pump");
+        let sync = app.active_sync.as_ref().expect("sync still active");
+        assert_eq!(sync.phase, SyncPhase::Materializing);
+        assert!(sync.deferred_update.is_none());
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("materializing 2026-06-01")
+        );
+
+        app.pump_sync_updates(&client).await.expect("third pump");
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("synced 1 snapshot(s), failed 0, materialized 1 day(s)")
+        );
+        assert!(app.active_sync.is_none());
     }
 }

@@ -7,8 +7,8 @@ use rpassword::prompt_password;
 use serde::Serialize;
 use tracing_subscriber::EnvFilter;
 
-use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::api::{CatalogExchange, PolarisClient};
+use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::cli::{
     AccountCommand, AccountSubcommand, Cli, Command, DatasetArgs, ListCommand, ListSubcommand,
     LocalListArgs, RemoteListArgs, ResetArgs, SyncArgs,
@@ -73,9 +73,7 @@ fn run_account_set_key() -> Result<u8> {
         .map_err(TickError::Other)?;
     let api_key = api_key.trim().to_string();
     if api_key.is_empty() {
-        return Err(TickError::InvalidArgument(
-            "API key cannot be empty".into(),
-        ));
+        return Err(TickError::InvalidArgument("API key cannot be empty".into()));
     }
 
     let store = KeychainCredentialStore::new()?;

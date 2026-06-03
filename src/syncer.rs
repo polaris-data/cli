@@ -36,8 +36,23 @@ pub struct SyncExecution {
 
 #[derive(Debug, Clone)]
 pub enum SyncProgressEvent {
-    Downloaded { key: String },
-    Failed { key: String, error: String },
+    Started {
+        key: String,
+        total_bytes: Option<u64>,
+    },
+    Progress {
+        key: String,
+        downloaded_bytes: u64,
+        total_bytes: Option<u64>,
+    },
+    Downloaded {
+        key: String,
+        total_bytes: u64,
+    },
+    Failed {
+        key: String,
+        error: String,
+    },
 }
 
 impl SyncExecution {
@@ -131,11 +146,12 @@ async fn execute_sync_inner(
     for snapshot in plan.missing_snapshots() {
         let client = client.clone();
         let permit = semaphore.clone();
+        let progress = progress.clone();
         tasks.push(tokio::spawn(async move {
             let _permit = permit.acquire_owned().await.expect("semaphore closed");
             let key = snapshot.key.clone();
-            match download_with_retry(&client, snapshot).await {
-                Ok(()) => Ok(key),
+            match download_with_retry(&client, snapshot, progress).await {
+                Ok(total_bytes) => Ok((key, total_bytes)),
                 Err(err) => Err(FailedDownload {
                     key,
                     error: err.to_string(),
@@ -149,9 +165,12 @@ async fn execute_sync_inner(
 
     while let Some(task) = tasks.next().await {
         match task {
-            Ok(Ok(key)) => {
+            Ok(Ok((key, total_bytes))) => {
                 if let Some(progress) = &progress {
-                    let _ = progress.send(SyncProgressEvent::Downloaded { key: key.clone() });
+                    let _ = progress.send(SyncProgressEvent::Downloaded {
+                        key: key.clone(),
+                        total_bytes,
+                    });
                 }
                 downloaded_keys.push(key);
             }
@@ -189,11 +208,15 @@ async fn execute_sync_inner(
     }
 }
 
-async fn download_with_retry(client: &PolarisClient, snapshot: SnapshotPlan) -> Result<()> {
+async fn download_with_retry(
+    client: &PolarisClient,
+    snapshot: SnapshotPlan,
+    progress: Option<UnboundedSender<SyncProgressEvent>>,
+) -> Result<u64> {
     let mut attempt = 0usize;
     loop {
-        match download_once(client, &snapshot).await {
-            Ok(()) => return Ok(()),
+        match download_once(client, &snapshot, progress.as_ref()).await {
+            Ok(total_bytes) => return Ok(total_bytes),
             Err(err) if err.retryable() && attempt < RETRY_DELAYS_MS.len() => {
                 let delay = RETRY_DELAYS_MS[attempt];
                 attempt += 1;
@@ -204,7 +227,11 @@ async fn download_with_retry(client: &PolarisClient, snapshot: SnapshotPlan) -> 
     }
 }
 
-async fn download_once(client: &PolarisClient, snapshot: &SnapshotPlan) -> Result<()> {
+async fn download_once(
+    client: &PolarisClient,
+    snapshot: &SnapshotPlan,
+    progress: Option<&UnboundedSender<SyncProgressEvent>>,
+) -> Result<u64> {
     if let Some(parent) = snapshot.local_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -225,7 +252,16 @@ async fn download_once(client: &PolarisClient, snapshot: &SnapshotPlan) -> Resul
             .map_err(TickError::Other)?;
     }
 
-    let response = client.download(&snapshot.download_url).await?;
+    let response = client
+        .download_snapshot(&snapshot.key, &snapshot.filename)
+        .await?;
+    let total_bytes = response.content_length();
+    if let Some(progress) = progress {
+        let _ = progress.send(SyncProgressEvent::Started {
+            key: snapshot.key.clone(),
+            total_bytes,
+        });
+    }
 
     if tokio::fs::metadata(&snapshot.local_path).await.is_ok()
         && snapshot.state != LocalSnapshotState::Present
@@ -241,6 +277,7 @@ async fn download_once(client: &PolarisClient, snapshot: &SnapshotPlan) -> Resul
         .with_context(|| format!("failed to create {}", snapshot.temp_path.display()))
         .map_err(TickError::Other)?;
 
+    let mut downloaded_bytes = 0u64;
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk
@@ -250,6 +287,14 @@ async fn download_once(client: &PolarisClient, snapshot: &SnapshotPlan) -> Resul
             .await
             .with_context(|| format!("failed to write {}", snapshot.temp_path.display()))
             .map_err(TickError::Other)?;
+        downloaded_bytes += chunk.len() as u64;
+        if let Some(progress) = progress {
+            let _ = progress.send(SyncProgressEvent::Progress {
+                key: snapshot.key.clone(),
+                downloaded_bytes,
+                total_bytes,
+            });
+        }
     }
     tokio::io::AsyncWriteExt::flush(&mut file)
         .await
@@ -278,7 +323,7 @@ async fn download_once(client: &PolarisClient, snapshot: &SnapshotPlan) -> Resul
         })
         .map_err(TickError::Other)?;
 
-    Ok(())
+    Ok(downloaded_bytes)
 }
 
 pub fn layout_for_root(root: PathBuf) -> Layout {
