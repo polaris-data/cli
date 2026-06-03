@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -53,6 +53,30 @@ impl RemoteDatasetEntry {
             .as_ref()
             .map(DatasetAccess::summary_label)
             .unwrap_or_else(|| "unknown".into())
+    }
+
+    pub fn access_details(&self) -> String {
+        match self.access.as_ref() {
+            Some(DatasetAccess {
+                status: DatasetAccessStatus::Open,
+                ..
+            }) => "open: all history publicly available".into(),
+            Some(DatasetAccess {
+                status: DatasetAccessStatus::Restricted,
+                ..
+            }) => "restricted: API key required for all history".into(),
+            Some(DatasetAccess {
+                status: DatasetAccessStatus::Preview,
+                public_cutoff_date: Some(date),
+            }) => format!(
+                "preview: public from {date} onward, API key required before that"
+            ),
+            Some(DatasetAccess {
+                status: DatasetAccessStatus::Preview,
+                public_cutoff_date: None,
+            }) => "preview: only recent history is public, older data requires an API key".into(),
+            None => "unknown".into(),
+        }
     }
 
     pub fn access_sort_order(&self) -> u8 {
@@ -886,6 +910,9 @@ async fn run_event_loop(
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    return Ok(());
+                }
                 if app.api_key_prompt.is_some() {
                     match key.code {
                         KeyCode::Esc => app.close_api_key_prompt(),
@@ -901,7 +928,6 @@ async fn run_event_loop(
                     continue;
                 }
                 match key.code {
-                    KeyCode::Char('q') => return Ok(()),
                     KeyCode::Esc => match app.mode {
                         ViewMode::Browser => return Ok(()),
                         ViewMode::Dataset(_) => app.mode = ViewMode::Browser,
@@ -1034,17 +1060,6 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
 
 fn render_browser_details(app: &RemoteListTui) -> Paragraph<'static> {
     let lines = if let Some(dataset) = app.selected_dataset() {
-        let local = app.local_summaries.get(&dataset.dataset);
-        let local_count = local.map(|summary| summary.snapshot_count).unwrap_or(0);
-        let local_first = local
-            .and_then(|summary| summary.first_start)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "-".into());
-        let local_last = local
-            .and_then(|summary| summary.last_end)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "-".into());
-
         vec![
             Line::from(vec![Span::styled(
                 dataset.dataset.clone(),
@@ -1052,24 +1067,14 @@ fn render_browser_details(app: &RemoteListTui) -> Paragraph<'static> {
             )]),
             Line::from(format!("exchange: {}", dataset.exchange)),
             Line::from(format!("asset: {}", dataset.asset)),
-            Line::from(format!("remote start: {}", dataset.start)),
-            Line::from(format!("remote end: {}", dataset.end)),
-            Line::from(format!(
-                "source: {}",
-                dataset.source.clone().unwrap_or_else(|| "-".into())
-            )),
-            Line::from(format!("access: {}", dataset.access_summary())),
-            Line::from(""),
-            Line::from(format!("local snapshots: {}", local_count)),
-            Line::from(format!("local first: {}", local_first)),
-            Line::from(format!("local last: {}", local_last)),
+            Line::from(format!("access: {}", dataset.access_details())),
             Line::from(""),
             Line::from("Keys"),
             Line::from("Type to search"),
             Line::from("Use access:open | access:preview | access:restricted"),
             Line::from("Up/Down move selection"),
             Line::from("Enter inspect snapshots"),
-            Line::from("q or Esc quit"),
+            Line::from("Ctrl+C or Esc quit"),
         ]
     } else {
         vec![Line::from("No dataset selected")]
@@ -1110,9 +1115,9 @@ fn render_dataset_view(
             Style::default().add_modifier(Modifier::BOLD),
         )]),
         Line::from(format!("data starting from {}", view.dataset.start)),
-        Line::from(format!("access: {}", view.dataset.access_summary())),
+        Line::from(format!("access: {}", view.dataset.access_details())),
         Line::from("Enter sync day, Left/Right move day, Up/Down move week"),
-        Line::from("Esc back, q quit"),
+        Line::from("Esc back, Ctrl+C quit"),
     ];
     if let Some(status) = status_message {
         summary_lines.push(Line::from(format!("status: {status}")));
