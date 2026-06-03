@@ -15,6 +15,7 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::block::Title;
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, error::TryRecvError, unbounded_channel};
 
@@ -237,6 +238,7 @@ enum DaySyncUpdate {
 
 #[derive(Debug)]
 enum ViewMode {
+    Splash,
     Browser,
     Dataset(DatasetView),
 }
@@ -295,7 +297,7 @@ impl RemoteListTui {
             status_message: None,
             active_sync: None,
             spinner_tick: 0,
-            mode: ViewMode::Browser,
+            mode: ViewMode::Splash,
             api_key_prompt: None,
         };
         app.recompute_filter();
@@ -343,7 +345,7 @@ impl RemoteListTui {
     fn dataset_view(&self) -> Option<&DatasetView> {
         match &self.mode {
             ViewMode::Dataset(view) => Some(view),
-            ViewMode::Browser => None,
+            ViewMode::Browser | ViewMode::Splash => None,
         }
     }
 
@@ -929,9 +931,13 @@ async fn run_event_loop(
                 }
                 match key.code {
                     KeyCode::Esc => match app.mode {
+                        ViewMode::Splash => {}
                         ViewMode::Browser => return Ok(()),
                         ViewMode::Dataset(_) => app.mode = ViewMode::Browser,
                     },
+                    KeyCode::Char(' ') if matches!(app.mode, ViewMode::Splash) => {
+                        app.mode = ViewMode::Browser;
+                    }
                     KeyCode::Enter => {
                         if matches!(app.mode, ViewMode::Browser) {
                             if let Err(err) = app.open_selected_dataset(&client).await {
@@ -989,6 +995,30 @@ async fn run_event_loop(
     }
 }
 
+fn render_splash(frame: &mut ratatui::Frame<'_>) {
+    let area = centered_rect(40, 5, frame.area());
+
+    let logo = vec![
+        Line::from(vec![Span::styled(
+            "Polaris",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Space to continue",
+            Style::default().fg(Color::Blue),
+        )]),
+    ];
+
+    let logo_block = Paragraph::new(logo)
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::NONE));
+    frame.render_widget(Clear, area);
+    frame.render_widget(logo_block, area);
+}
+
 fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     match app.dataset_view() {
         Some(view) => render_dataset_view(
@@ -998,7 +1028,11 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
             app.active_sync.as_ref(),
             app.spinner_tick,
         ),
-        None => render_browser(frame, app),
+        None => match app.mode {
+            ViewMode::Splash => render_splash(frame),
+            ViewMode::Browser => render_browser(frame, app),
+            _ => unreachable!(),
+        },
     }
 
     if let Some(prompt) = &app.api_key_prompt {
@@ -1009,7 +1043,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
 fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)])
         .split(frame.area());
 
     let content = Layout::default()
@@ -1017,9 +1051,15 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(areas[1]);
 
+    let version_title = Title {
+        content: Line::from("Polaris v0.1.0").alignment(Alignment::Right),
+        alignment: Some(Alignment::Right),
+        position: None,
+    };
     let search = Paragraph::new(app.search.clone()).block(
         Block::default()
             .title("Search dataset or access")
+            .title(version_title)
             .borders(Borders::ALL),
     );
     frame.render_widget(search, areas[0]);
@@ -1056,6 +1096,14 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     let details = render_browser_details(app);
     frame.render_widget(Clear, content[1]);
     frame.render_widget(details, content[1]);
+
+    render_footer(frame, areas[2], " Type to search  │  ↑/↓ navigate  │  Enter inspect dataset  │  Ctrl+C quit ");
+}
+
+fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, text: &str) {
+    let footer = Paragraph::new(text)
+        .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(footer, area);
 }
 
 fn render_browser_details(app: &RemoteListTui) -> Paragraph<'static> {
@@ -1069,12 +1117,8 @@ fn render_browser_details(app: &RemoteListTui) -> Paragraph<'static> {
             Line::from(format!("asset: {}", dataset.asset)),
             Line::from(format!("access: {}", dataset.access_details())),
             Line::from(""),
-            Line::from("Keys"),
             Line::from("Type to search"),
             Line::from("Use access:open | access:preview | access:restricted"),
-            Line::from("Up/Down move selection"),
-            Line::from("Enter inspect snapshots"),
-            Line::from("Ctrl+C or Esc quit"),
         ]
     } else {
         vec![Line::from("No dataset selected")]
@@ -1103,9 +1147,10 @@ fn render_dataset_view(
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6),
+            Constraint::Length(4),
             Constraint::Min(8),
             Constraint::Length(12),
+            Constraint::Length(1),
         ])
         .split(frame.area());
 
@@ -1116,8 +1161,6 @@ fn render_dataset_view(
         )]),
         Line::from(format!("data starting from {}", view.dataset.start)),
         Line::from(format!("access: {}", view.dataset.access_details())),
-        Line::from("Enter sync day, Left/Right move day, Up/Down move week"),
-        Line::from("Esc back, Ctrl+C quit"),
     ];
     if let Some(status) = status_message {
         summary_lines.push(Line::from(format!("status: {status}")));
@@ -1130,6 +1173,8 @@ fn render_dataset_view(
 
     frame.render_widget(render_day_grid(view, active_sync, spinner_tick), areas[1]);
     frame.render_widget(render_selected_day_summary(view, active_sync), areas[2]);
+
+    render_footer(frame, areas[3], " Enter sync day  │  ←/→ move day  │  ↑/↓ move week  │  Esc back  │  Ctrl+C quit ");
 }
 
 fn render_day_grid(
