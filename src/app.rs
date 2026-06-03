@@ -650,6 +650,7 @@ fn filter_remote_catalog(
                 end: asset.end,
                 source: asset.source.clone(),
                 access: asset.access.clone(),
+                categories: asset.categories.clone(),
                 dataset,
             };
             if let Some(search) = filters.search.as_deref()
@@ -822,6 +823,7 @@ mod tests {
                     status: DatasetAccessStatus::Preview,
                     public_cutoff_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
                 }),
+                categories: Vec::new(),
                 dataset: "aster:BTCUSDT".into(),
             }],
         };
@@ -953,6 +955,7 @@ mod tests {
                             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
                             source: Some("manifest".into()),
+                            categories: Vec::new(),
                             access: Some(DatasetAccess {
                                 status: DatasetAccessStatus::Restricted,
                                 public_cutoff_date: None,
@@ -963,6 +966,7 @@ mod tests {
                             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
                             source: Some("manifest".into()),
+                            categories: Vec::new(),
                             access: Some(DatasetAccess {
                                 status: DatasetAccessStatus::Open,
                                 public_cutoff_date: None,
@@ -977,6 +981,7 @@ mod tests {
                         start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                         end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
                         source: Some("manifest".into()),
+                        categories: Vec::new(),
                         access: Some(DatasetAccess {
                             status: DatasetAccessStatus::Preview,
                             public_cutoff_date: Some(

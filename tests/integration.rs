@@ -398,6 +398,7 @@ async fn handle_catalog(
             start: state.coverage.from,
             end: state.coverage.to,
             source: Some("manifest".into()),
+            categories: Vec::new(),
             access: Some(DatasetAccess {
                 status: DatasetAccessStatus::Preview,
                 public_cutoff_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
