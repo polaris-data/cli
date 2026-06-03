@@ -16,8 +16,8 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::widgets::block::Title;
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, error::TryRecvError, unbounded_channel};
 
@@ -71,9 +71,7 @@ impl RemoteDatasetEntry {
             Some(DatasetAccess {
                 status: DatasetAccessStatus::Preview,
                 public_cutoff_date: Some(date),
-            }) => format!(
-                "preview: public from {date} onward, API key required before that"
-            ),
+            }) => format!("preview: public from {date} onward, API key required before that"),
             Some(DatasetAccess {
                 status: DatasetAccessStatus::Preview,
                 public_cutoff_date: None,
@@ -171,7 +169,9 @@ struct BookmarkStore {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ApiKeyRequirement {
     Restricted,
-    Preview { public_cutoff_date: Option<NaiveDate> },
+    Preview {
+        public_cutoff_date: Option<NaiveDate>,
+    },
     LegacyPreviewWindow,
 }
 
@@ -323,7 +323,9 @@ impl RemoteListTui {
     }
 
     fn recompute_filter(&mut self) {
-        let selected_dataset = self.selected_dataset().map(|dataset| dataset.dataset.clone());
+        let selected_dataset = self
+            .selected_dataset()
+            .map(|dataset| dataset.dataset.clone());
         self.filtered_indices = self
             .datasets
             .iter()
@@ -377,9 +379,9 @@ impl RemoteListTui {
     fn current_dataset_id(&self) -> Option<&str> {
         match &self.mode {
             ViewMode::Dataset(view) => Some(view.dataset.dataset.as_str()),
-            ViewMode::Browser | ViewMode::Splash => {
-                self.selected_dataset().map(|dataset| dataset.dataset.as_str())
-            }
+            ViewMode::Browser | ViewMode::Splash => self
+                .selected_dataset()
+                .map(|dataset| dataset.dataset.as_str()),
         }
     }
 
@@ -1055,7 +1057,9 @@ async fn run_event_loop(
                             app.recompute_filter();
                         }
                     }
-                    KeyCode::Char(c) if matches!(app.mode, ViewMode::Browser) && is_search_input_key(&key) => {
+                    KeyCode::Char(c)
+                        if matches!(app.mode, ViewMode::Browser) && is_search_input_key(&key) =>
+                    {
                         if matches!(app.mode, ViewMode::Browser) {
                             app.search.push(c);
                             app.recompute_filter();
@@ -1068,28 +1072,183 @@ async fn run_event_loop(
     }
 }
 
-fn render_splash(frame: &mut ratatui::Frame<'_>) {
-    let area = centered_rect(40, 5, frame.area());
+fn render_splash(frame: &mut ratatui::Frame<'_>, spinner_tick: usize) {
+    let area = frame.area();
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Fill(3),
+            Constraint::Length(6),
+            Constraint::Length(2),
+            Constraint::Fill(1),
+        ])
+        .split(area);
 
-    let logo = vec![
-        Line::from(vec![Span::styled(
-            "Polaris",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Space to continue",
-            Style::default().fg(Color::Blue),
-        )]),
-    ];
+    let sky_area = centered_rect(82, sections[0].height, sections[0]);
+    let copy_area = centered_rect(72, sections[1].height, sections[1]);
+    let footer_area = centered_rect(50, sections[2].height, sections[2]);
 
-    let logo_block = Paragraph::new(logo)
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::NONE));
     frame.render_widget(Clear, area);
-    frame.render_widget(logo_block, area);
+    frame.render_widget(
+        Paragraph::new(splash_sky_lines(sky_area, spinner_tick)).alignment(Alignment::Center),
+        sky_area,
+    );
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![Span::styled(
+                "Polaris",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "A fixed point for orderly market data sync.",
+                Style::default().fg(Color::White),
+            )]),
+            Line::from(vec![Span::styled(
+                "Browse datasets. Track daily coverage. Pull the missing pieces.",
+                Style::default().fg(Color::DarkGray),
+            )]),
+        ])
+        .alignment(Alignment::Center),
+        copy_area,
+    );
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(vec![Span::styled(
+            "Space to open catalog",
+            Style::default().fg(Color::Blue),
+        )])])
+        .alignment(Alignment::Center),
+        footer_area,
+    );
+}
+
+fn splash_sky_lines(area: Rect, spinner_tick: usize) -> Vec<Line<'static>> {
+    let height = usize::from(area.height).max(8);
+    let width = usize::from(area.width).max(24);
+    let pole_x = (width as f32 * 0.58).min((width.saturating_sub(1)) as f32);
+    let pole_y = (height as f32 * 0.30).max(1.0);
+    let mut lines = Vec::with_capacity(height);
+
+    for row in 0..height {
+        lines.push(splash_sky_line(
+            width,
+            height,
+            row,
+            pole_x,
+            pole_y,
+            spinner_tick,
+        ));
+    }
+
+    lines
+}
+
+fn splash_sky_line(
+    width: usize,
+    height: usize,
+    row: usize,
+    pole_x: f32,
+    pole_y: f32,
+    spinner_tick: usize,
+) -> Line<'static> {
+    let mut spans = Vec::with_capacity(width);
+    let horizon_start = height.saturating_mul(4) / 5;
+
+    for col in 0..width {
+        let sky = splash_sky_cell(width, height, col, row, pole_x, pole_y, spinner_tick);
+        let silhouette = splash_silhouette_cell(width, horizon_start, col, row);
+        spans.push(if let Some(silhouette) = silhouette {
+            silhouette
+        } else {
+            sky
+        });
+    }
+
+    Line::from(spans)
+}
+
+fn splash_sky_cell(
+    width: usize,
+    height: usize,
+    col: usize,
+    row: usize,
+    pole_x: f32,
+    pole_y: f32,
+    spinner_tick: usize,
+) -> Span<'static> {
+    let x = col as f32;
+    let y = row as f32;
+    let dx = (x - pole_x) * 0.48;
+    let dy = y - pole_y;
+    let radius = (dx * dx + dy * dy).sqrt();
+    let ring_phase = radius * 1.33;
+    let ring_error = (ring_phase - ring_phase.round()).abs();
+    let angle = dy.atan2(dx);
+    let sweep = angle * 4.0 + spinner_tick as f32 * 0.18 + radius * 0.09;
+    let sparkle = sweep.sin().abs();
+    let horizon_fade = 1.0 - (row as f32 / height.max(1) as f32) * 0.35;
+
+    if radius < 1.4 {
+        return Span::styled(
+            "o",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
+
+    if ring_error > 0.12 * horizon_fade {
+        return Span::raw(" ");
+    }
+
+    let color = if sparkle > 0.96 {
+        Color::White
+    } else if sparkle > 0.86 {
+        Color::Cyan
+    } else if radius < width as f32 * 0.10 {
+        Color::Gray
+    } else if radius < width as f32 * 0.22 {
+        Color::DarkGray
+    } else {
+        Color::Gray
+    };
+    let symbol = if sparkle > 0.97 {
+        "*"
+    } else if sparkle > 0.90 {
+        ":"
+    } else if ((col + row + spinner_tick / 2) % 11) == 0 {
+        "'"
+    } else {
+        "."
+    };
+
+    Span::styled(symbol, Style::default().fg(color))
+}
+
+fn splash_silhouette_cell(
+    width: usize,
+    horizon_start: usize,
+    col: usize,
+    row: usize,
+) -> Option<Span<'static>> {
+    if row < horizon_start {
+        return None;
+    }
+
+    let floor =
+        horizon_start + ((col * 3 + 7) % 5) / 2 + if col > width / 2 { (col + row) % 2 } else { 0 };
+    let left_tree = col < width / 6 && row >= horizon_start.saturating_sub(col / 4);
+    let right_tree =
+        col > (width * 5) / 6 && row >= horizon_start.saturating_sub((width - col) / 5);
+    let center_branch = col.abs_diff(width / 2) < 2 && row >= horizon_start.saturating_sub(3);
+
+    if row >= floor || left_tree || right_tree || center_branch {
+        Some(Span::styled("#", Style::default().fg(Color::DarkGray)))
+    } else {
+        None
+    }
 }
 
 fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
@@ -1103,7 +1262,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
             app.spinner_tick,
         ),
         None => match app.mode {
-            ViewMode::Splash => render_splash(frame),
+            ViewMode::Splash => render_splash(frame, app.spinner_tick),
             ViewMode::Browser => render_browser(frame, app),
             _ => unreachable!(),
         },
@@ -1117,7 +1276,11 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
 fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(frame.area());
 
     let content = Layout::default()
@@ -1179,12 +1342,15 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     frame.render_widget(Clear, content[1]);
     frame.render_widget(details, content[1]);
 
-    render_footer(frame, areas[2], " Type to search  │  ↑/↓ navigate  │  Tab bookmark  │  Enter inspect dataset  │  Ctrl+C quit ");
+    render_footer(
+        frame,
+        areas[2],
+        " Type to search  │  ↑/↓ navigate  │  Tab bookmark  │  Enter inspect dataset  │  Ctrl+C quit ",
+    );
 }
 
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, text: &str) {
-    let footer = Paragraph::new(text)
-        .style(Style::default().fg(Color::DarkGray));
+    let footer = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(footer, area);
 }
 
@@ -1254,11 +1420,7 @@ fn render_dataset_view(
         Line::from(format!("access: {}", view.dataset.access_details())),
         Line::from(format!(
             "bookmarked: {}",
-            if is_bookmarked {
-                "yes"
-            } else {
-                "no"
-            }
+            if is_bookmarked { "yes" } else { "no" }
         )),
     ];
     if let Some(status) = status_message {
@@ -1273,7 +1435,11 @@ fn render_dataset_view(
     frame.render_widget(render_day_grid(view, active_sync, spinner_tick), areas[1]);
     frame.render_widget(render_selected_day_summary(view, active_sync), areas[2]);
 
-    render_footer(frame, areas[3], " Enter sync day  │  Tab next day  │  ←/→ move day  │  ↑/↓ move week  │  Esc back  │  Ctrl+C quit ");
+    render_footer(
+        frame,
+        areas[3],
+        " Enter sync day  │  Tab next day  │  ←/→ move day  │  ↑/↓ move week  │  Esc back  │  Ctrl+C quit ",
+    );
 }
 
 fn render_day_grid(
@@ -1795,11 +1961,7 @@ fn load_bookmarks(root: &Path) -> Result<BTreeSet<String>> {
     let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
-        Err(err) => {
-            return Err(TickError::Other(
-                err.into(),
-            ))
-        }
+        Err(err) => return Err(TickError::Other(err.into())),
     };
 
     let store: BookmarkStore = serde_json::from_str(&contents)
@@ -1873,9 +2035,9 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::{
-        ActiveDaySync, DatasetView, DaySyncUpdate, RemoteDatasetEntry, RemoteListTui,
-        RemoteTuiSeed, SyncPhase, build_day_coverages, diff_missing_snapshot_keys,
-        ApiKeyRequirement, api_key_requirement_for_download, load_bookmarks, save_bookmarks,
+        ActiveDaySync, ApiKeyRequirement, DatasetView, DaySyncUpdate, RemoteDatasetEntry,
+        RemoteListTui, RemoteTuiSeed, SyncPhase, api_key_requirement_for_download,
+        build_day_coverages, diff_missing_snapshot_keys, load_bookmarks, save_bookmarks,
     };
     use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
     use crate::layout::LocalSnapshotEntry;
@@ -2307,13 +2469,7 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
         let selected_date = NaiveDate::from_ymd_opt(2026, 6, 2).unwrap();
         assert_eq!(
-            api_key_requirement_for_download(
-                None,
-                selected_date,
-                today,
-                false,
-                1
-            ),
+            api_key_requirement_for_download(None, selected_date, today, false, 1),
             Some(ApiKeyRequirement::LegacyPreviewWindow)
         );
     }
