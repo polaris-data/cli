@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="spectrum-ec/tick"
+REPO="polaris-data/cli"
 PROJECT="polaris"
 DEFAULT_INSTALL_DIR="${HOME}/.polaris/bin"
 LEGACY_INSTALL_DIR="${HOME}/.tick/bin"
