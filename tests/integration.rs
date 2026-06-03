@@ -400,9 +400,7 @@ async fn handle_catalog(
             source: Some("manifest".into()),
             access: Some(DatasetAccess {
                 status: DatasetAccessStatus::Preview,
-                public_cutoff_date: Some(
-                    chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
-                ),
+                public_cutoff_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
             }),
         }]
     } else {
