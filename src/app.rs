@@ -511,8 +511,12 @@ impl HumanOutput for RemoteListOutput {
             lines.push("remote datasets:".into());
             for dataset in &self.datasets {
                 lines.push(format!(
-                    "  {}:{} {} -> {}",
-                    dataset.exchange, dataset.asset, dataset.start, dataset.end
+                    "  {}:{} {} -> {} ({})",
+                    dataset.exchange,
+                    dataset.asset,
+                    dataset.start,
+                    dataset.end,
+                    dataset.access_summary()
                 ));
             }
         }
@@ -627,10 +631,6 @@ fn filter_remote_catalog(
     filters: &RemoteListFilters,
     limit: usize,
 ) -> Vec<RemoteDatasetEntry> {
-    let search = filters
-        .search
-        .as_deref()
-        .map(|value| value.to_ascii_lowercase());
     let mut datasets = Vec::new();
 
     for exchange in exchanges {
@@ -643,24 +643,29 @@ fn filter_remote_catalog(
             if !matches_exact(Some(asset.id.as_str()), filters.asset.as_deref()) {
                 continue;
             }
-            if let Some(search) = search.as_deref() {
-                let haystack = dataset.to_ascii_lowercase();
-                if !haystack.contains(search) {
-                    continue;
-                }
-            }
-            datasets.push(RemoteDatasetEntry {
+            let entry = RemoteDatasetEntry {
                 exchange: exchange_id.clone(),
                 asset: asset.id.clone(),
                 start: asset.start,
                 end: asset.end,
                 source: asset.source.clone(),
+                access: asset.access.clone(),
                 dataset,
-            });
+            };
+            if let Some(search) = filters.search.as_deref()
+                && !entry.matches_search(search)
+            {
+                continue;
+            }
+            datasets.push(entry);
         }
     }
 
-    datasets.sort_by(|left, right| left.dataset.cmp(&right.dataset));
+    datasets.sort_by(|left, right| {
+        left.access_sort_order()
+            .cmp(&right.access_sort_order())
+            .then(left.dataset.cmp(&right.dataset))
+    });
     if datasets.len() > limit {
         datasets.truncate(limit);
     }
@@ -790,7 +795,7 @@ mod tests {
         SyncOutput, TimeWindow, filter_local_list_entries, filter_remote_catalog,
         infer_install_dir_from_executable, looks_like_cargo_target_dir, run_reset,
     };
-    use crate::api::{CatalogAsset, CatalogExchange};
+    use crate::api::{CatalogAsset, CatalogExchange, DatasetAccess, DatasetAccessStatus};
     use crate::cli::ResetArgs;
     use crate::config::Config;
     use crate::layout::{Layout, LocalSnapshotEntry};
@@ -813,13 +818,19 @@ mod tests {
                 start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 end: Utc.with_ymd_and_hms(2026, 6, 1, 0, 9, 59).unwrap(),
                 source: Some("manifest".into()),
+                access: Some(DatasetAccess {
+                    status: DatasetAccessStatus::Preview,
+                    public_cutoff_date: Some(
+                        chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+                    ),
+                }),
                 dataset: "aster:BTCUSDT".into(),
             }],
         };
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"list\",\"filters\":{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"search\":\"btc\"},\"dataset_total\":1,\"datasets\":[{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\",\"source\":\"manifest\",\"dataset\":\"aster:BTCUSDT\"}]}"
+            "{\"command\":\"list\",\"filters\":{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"search\":\"btc\"},\"dataset_total\":1,\"datasets\":[{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\",\"source\":\"manifest\",\"access\":{\"status\":\"preview\",\"public_cutoff_date\":\"2026-05-28\"},\"dataset\":\"aster:BTCUSDT\"}]}"
         );
     }
 
@@ -944,12 +955,20 @@ mod tests {
                             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
                             source: Some("manifest".into()),
+                            access: Some(DatasetAccess {
+                                status: DatasetAccessStatus::Restricted,
+                                public_cutoff_date: None,
+                            }),
                         },
                         CatalogAsset {
                             id: "ETHUSDT".into(),
                             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
                             source: Some("manifest".into()),
+                            access: Some(DatasetAccess {
+                                status: DatasetAccessStatus::Open,
+                                public_cutoff_date: None,
+                            }),
                         },
                     ],
                 },
@@ -960,6 +979,12 @@ mod tests {
                         start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                         end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
                         source: Some("manifest".into()),
+                        access: Some(DatasetAccess {
+                            status: DatasetAccessStatus::Preview,
+                            public_cutoff_date: Some(
+                                chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+                            ),
+                        }),
                     }],
                 },
             ],
@@ -973,6 +998,13 @@ mod tests {
 
         assert_eq!(datasets.len(), 1);
         assert!(datasets[0].dataset.contains("BTCUSDT"));
+        assert_eq!(
+            datasets[0]
+                .access
+                .as_ref()
+                .map(|access| access.status.clone()),
+            Some(DatasetAccessStatus::Preview)
+        );
     }
 
     #[test]

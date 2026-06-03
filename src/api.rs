@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use reqwest::{Client, StatusCode, redirect};
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +34,73 @@ pub struct CatalogAsset {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub source: Option<String>,
+    #[serde(default)]
+    pub access: Option<DatasetAccess>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct DatasetAccess {
+    pub status: DatasetAccessStatus,
+    #[serde(default)]
+    pub public_cutoff_date: Option<NaiveDate>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DatasetAccessStatus {
+    Open,
+    Preview,
+    Restricted,
+}
+
+impl DatasetAccess {
+    pub fn search_text(&self) -> String {
+        match self.status {
+            DatasetAccessStatus::Open => "open".into(),
+            DatasetAccessStatus::Restricted => "restricted".into(),
+            DatasetAccessStatus::Preview => match self.public_cutoff_date {
+                Some(date) => format!("preview {}", date),
+                None => "preview".into(),
+            },
+        }
+    }
+
+    pub fn sort_order(&self) -> u8 {
+        match self.status {
+            DatasetAccessStatus::Open => 0,
+            DatasetAccessStatus::Preview => 1,
+            DatasetAccessStatus::Restricted => 2,
+        }
+    }
+
+    pub fn status_label(&self) -> &'static str {
+        match self.status {
+            DatasetAccessStatus::Open => "open",
+            DatasetAccessStatus::Preview => "preview",
+            DatasetAccessStatus::Restricted => "restricted",
+        }
+    }
+
+    pub fn requires_api_key_for_date(&self, selected_date: NaiveDate) -> bool {
+        match self.status {
+            DatasetAccessStatus::Open => false,
+            DatasetAccessStatus::Restricted => true,
+            DatasetAccessStatus::Preview => self
+                .public_cutoff_date
+                .is_none_or(|cutoff| selected_date < cutoff),
+        }
+    }
+
+    pub fn summary_label(&self) -> String {
+        match self.status {
+            DatasetAccessStatus::Open => "open".into(),
+            DatasetAccessStatus::Restricted => "restricted".into(),
+            DatasetAccessStatus::Preview => match self.public_cutoff_date {
+                Some(date) => format!("preview from {}", date),
+                None => "preview".into(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -298,7 +365,9 @@ fn to_rfc3339(value: DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SnapshotEntryWire, StandardSnapshotsPageWire};
+    use super::{
+        CatalogResponse, DatasetAccessStatus, SnapshotEntryWire, StandardSnapshotsPageWire,
+    };
 
     #[test]
     fn parses_current_snapshots_shape() {
@@ -337,6 +406,43 @@ mod tests {
         assert_eq!(
             snapshot.filename,
             "aster_ASTERUSDT_2026-06-01_standard.jsonl.zst"
+        );
+    }
+
+    #[test]
+    fn parses_catalog_access_shape() {
+        let catalog: CatalogResponse = serde_json::from_str(
+            r#"{
+                "exchanges":[
+                    {
+                        "id":"aster",
+                        "assets":[
+                            {
+                                "id":"ASTERUSDT",
+                                "start":"2026-05-18T14:16:33.886Z",
+                                "end":"2026-06-03T13:10:01.561Z",
+                                "source":"manifest",
+                                "access":{
+                                    "status":"preview",
+                                    "public_cutoff_date":"2026-05-28"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                "updatedAt":"2026-06-03T13:15:37.917Z"
+            }"#,
+        )
+        .expect("catalog should parse");
+
+        let access = catalog.exchanges[0].assets[0]
+            .access
+            .as_ref()
+            .expect("access should parse");
+        assert_eq!(access.status, DatasetAccessStatus::Preview);
+        assert_eq!(
+            access.public_cutoff_date.map(|value| value.to_string()),
+            Some("2026-05-28".into())
         );
     }
 
