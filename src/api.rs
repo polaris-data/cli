@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Context, anyhow};
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use reqwest::{Client, StatusCode, redirect};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{Result, TickError};
 
@@ -34,8 +34,36 @@ pub struct CatalogAsset {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub source: Option<String>,
+    #[serde(
+        default,
+        alias = "category",
+        deserialize_with = "deserialize_catalog_categories"
+    )]
+    pub categories: Vec<String>,
     #[serde(default)]
     pub access: Option<DatasetAccess>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CatalogCategoriesWire {
+    One(String),
+    Many(Vec<String>),
+}
+
+fn deserialize_catalog_categories<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(
+        match Option::<CatalogCategoriesWire>::deserialize(deserializer)? {
+            Some(CatalogCategoriesWire::One(category)) => vec![category],
+            Some(CatalogCategoriesWire::Many(categories)) => categories,
+            None => Vec::new(),
+        },
+    )
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -443,6 +471,42 @@ mod tests {
         assert_eq!(
             access.public_cutoff_date.map(|value| value.to_string()),
             Some("2026-05-28".into())
+        );
+    }
+
+    #[test]
+    fn parses_catalog_categories_from_string_or_array() {
+        let catalog: CatalogResponse = serde_json::from_str(
+            r#"{
+                "exchanges":[
+                    {
+                        "id":"aster",
+                        "assets":[
+                            {
+                                "id":"ASTERUSDT",
+                                "start":"2026-05-18T14:16:33.886Z",
+                                "end":"2026-06-03T13:10:01.561Z",
+                                "source":"manifest",
+                                "category":"Bookmarks"
+                            },
+                            {
+                                "id":"BTCUSDT",
+                                "start":"2026-05-18T14:16:33.886Z",
+                                "end":"2026-06-03T13:10:01.561Z",
+                                "source":"manifest",
+                                "categories":["Futures","Top Volume"]
+                            }
+                        ]
+                    }
+                ]
+            }"#,
+        )
+        .expect("catalog should parse");
+
+        assert_eq!(catalog.exchanges[0].assets[0].categories, vec!["Bookmarks"]);
+        assert_eq!(
+            catalog.exchanges[0].assets[1].categories,
+            vec!["Futures", "Top Volume"]
         );
     }
 

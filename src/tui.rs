@@ -38,6 +38,8 @@ pub struct RemoteDatasetEntry {
     pub end: DateTime<Utc>,
     pub source: Option<String>,
     pub access: Option<DatasetAccess>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
     pub dataset: String,
 }
 
@@ -94,9 +96,10 @@ impl RemoteDatasetEntry {
         }
 
         let haystack = format!(
-            "{} {} {}",
+            "{} {} {} {}",
             self.dataset,
             self.source.as_deref().unwrap_or_default(),
+            self.categories.join(" "),
             self.access
                 .as_ref()
                 .map(DatasetAccess::search_text)
@@ -250,12 +253,31 @@ enum ViewMode {
     Dataset(DatasetView),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BrowserCategory {
+    AllDatasets,
+    Bookmarks,
+    Catalog(String),
+}
+
+impl BrowserCategory {
+    fn label(&self) -> &str {
+        match self {
+            Self::AllDatasets => "All",
+            Self::Bookmarks => "Bookmarks",
+            Self::Catalog(category) => category.as_str(),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct RemoteListTui {
     datasets: Vec<RemoteDatasetEntry>,
     filtered_indices: Vec<usize>,
     selected: usize,
     search: String,
+    categories: Vec<BrowserCategory>,
+    selected_category: usize,
     bookmarks: BTreeSet<String>,
     session_priority_bookmarks: BTreeSet<String>,
     local_summaries: BTreeMap<String, LocalDatasetSummary>,
@@ -300,11 +322,14 @@ impl RemoteListTui {
         let local_summaries = summarize_local_snapshots(&local_snapshots);
         let local_keys = group_local_snapshot_keys(local_snapshots);
         let daily_artifacts = group_local_daily_artifacts(local_daily_artifacts);
+        let categories = browser_categories(&datasets);
         let mut app = Self {
             datasets,
             filtered_indices: Vec::new(),
             selected: 0,
             search,
+            categories,
+            selected_category: 0,
             bookmarks: bookmarks.clone(),
             session_priority_bookmarks: bookmarks,
             local_summaries,
@@ -331,7 +356,7 @@ impl RemoteListTui {
             .iter()
             .enumerate()
             .filter_map(|(index, dataset)| {
-                if dataset.matches_search(&self.search) {
+                if self.matches_current_category(dataset) && dataset.matches_search(&self.search) {
                     Some(index)
                 } else {
                     None
@@ -364,6 +389,30 @@ impl RemoteListTui {
             .and_then(|index| self.datasets.get(*index))
     }
 
+    fn selected_category(&self) -> &BrowserCategory {
+        self.categories
+            .get(self.selected_category)
+            .expect("browser categories should always include defaults")
+    }
+
+    fn category_display_labels(&self) -> Vec<String> {
+        self.categories
+            .iter()
+            .map(|category| category.label().to_ascii_lowercase())
+            .collect()
+    }
+
+    fn matches_current_category(&self, dataset: &RemoteDatasetEntry) -> bool {
+        match self.selected_category() {
+            BrowserCategory::AllDatasets => true,
+            BrowserCategory::Bookmarks => self.is_bookmarked(dataset.dataset.as_str()),
+            BrowserCategory::Catalog(category) => dataset
+                .categories
+                .iter()
+                .any(|candidate| candidate == category),
+        }
+    }
+
     fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
@@ -373,6 +422,19 @@ impl RemoteListTui {
     fn move_down(&mut self) {
         if self.selected + 1 < self.filtered_indices.len() {
             self.selected += 1;
+        }
+    }
+
+    fn cycle_category(&mut self, delta: isize) {
+        if self.categories.is_empty() {
+            return;
+        }
+
+        let len = self.categories.len() as isize;
+        let next = (self.selected_category as isize + delta).rem_euclid(len) as usize;
+        if next != self.selected_category {
+            self.selected_category = next;
+            self.recompute_filter();
         }
     }
 
@@ -404,6 +466,7 @@ impl RemoteListTui {
 
         save_bookmarks(&self.root, &next)?;
         self.bookmarks = next;
+        self.recompute_filter();
         self.status_message = Some(message);
         Ok(())
     }
@@ -1035,11 +1098,15 @@ async fn run_event_loop(
                     KeyCode::Left => {
                         if let ViewMode::Dataset(view) = &mut app.mode {
                             view.move_selection(-1);
+                        } else if matches!(app.mode, ViewMode::Browser) {
+                            app.cycle_category(-1);
                         }
                     }
                     KeyCode::Right => {
                         if let ViewMode::Dataset(view) = &mut app.mode {
                             view.move_selection(1);
+                        } else if matches!(app.mode, ViewMode::Browser) {
+                            app.cycle_category(1);
                         }
                     }
                     KeyCode::Tab => match app.mode {
@@ -1283,11 +1350,6 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
         ])
         .split(frame.area());
 
-    let content = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(areas[1]);
-
     let version_title = Title {
         content: Line::from("Polaris v0.1.0").alignment(Alignment::Right),
         alignment: Some(Alignment::Right),
@@ -1333,64 +1395,58 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     let mut state = ListState::default()
         .with_selected((!app.filtered_indices.is_empty()).then_some(app.selected));
     let list = List::new(items)
-        .block(Block::default().title("Datasets").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("Datasets")
+                .title(category_carousel_title(app))
+                .borders(Borders::ALL),
+        )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol(">> ");
-    frame.render_stateful_widget(list, content[0], &mut state);
-
-    let details = render_browser_details(app);
-    frame.render_widget(Clear, content[1]);
-    frame.render_widget(details, content[1]);
+    frame.render_stateful_widget(list, areas[1], &mut state);
 
     render_footer(
         frame,
         areas[2],
-        " Type to search  │  ↑/↓ navigate  │  Tab bookmark  │  Enter inspect dataset  │  Ctrl+C quit ",
+        " Type to search  │  ←/→ category  │  ↑/↓ navigate  │  Tab bookmark  │  Enter inspect dataset  │  Ctrl+C quit ",
     );
+}
+
+fn category_carousel_title(app: &RemoteListTui) -> Title<'static> {
+    let labels = app.category_display_labels();
+    let mut spans = Vec::new();
+
+    for (index, label) in labels.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+        }
+
+        let is_active = index == app.selected_category;
+        let text = if is_active {
+            format!("*{label}*")
+        } else {
+            label.clone()
+        };
+        let style = if is_active {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(text, style));
+    }
+
+    Title {
+        content: Line::from(spans).alignment(Alignment::Center),
+        alignment: Some(Alignment::Center),
+        position: None,
+    }
 }
 
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, text: &str) {
     let footer = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(footer, area);
-}
-
-fn render_browser_details(app: &RemoteListTui) -> Paragraph<'static> {
-    let lines = if let Some(dataset) = app.selected_dataset() {
-        vec![
-            Line::from(vec![Span::styled(
-                dataset.dataset.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(format!("exchange: {}", dataset.exchange)),
-            Line::from(format!("asset: {}", dataset.asset)),
-            Line::from(format!("access: {}", dataset.access_details())),
-            Line::from(format!(
-                "bookmarked: {}",
-                if app.is_bookmarked(dataset.dataset.as_str()) {
-                    "yes"
-                } else {
-                    "no"
-                }
-            )),
-            Line::from(""),
-            Line::from("Type to search"),
-            Line::from("Use access:open | access:preview | access:restricted"),
-        ]
-    } else {
-        vec![Line::from("No dataset selected")]
-    };
-
-    let mut lines = lines;
-    if let Some(status) = &app.status_message {
-        lines.push(Line::from(""));
-        lines.push(Line::from(format!("status: {status}")));
-    }
-
-    Paragraph::new(lines).wrap(Wrap { trim: true }).block(
-        Block::default()
-            .title("Dataset Details")
-            .borders(Borders::ALL),
-    )
 }
 
 fn render_dataset_view(
@@ -1990,6 +2046,16 @@ fn access_color(access: Option<&DatasetAccess>) -> Color {
     }
 }
 
+fn browser_categories(datasets: &[RemoteDatasetEntry]) -> Vec<BrowserCategory> {
+    let mut categories = vec![BrowserCategory::AllDatasets, BrowserCategory::Bookmarks];
+    let catalog_categories = datasets
+        .iter()
+        .flat_map(|dataset| dataset.categories.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    categories.extend(catalog_categories.into_iter().map(BrowserCategory::Catalog));
+    categories
+}
+
 fn api_key_requirement_for_download(
     access: Option<&DatasetAccess>,
     selected_date: NaiveDate,
@@ -2035,9 +2101,10 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::{
-        ActiveDaySync, ApiKeyRequirement, DatasetView, DaySyncUpdate, RemoteDatasetEntry,
-        RemoteListTui, RemoteTuiSeed, SyncPhase, api_key_requirement_for_download,
-        build_day_coverages, diff_missing_snapshot_keys, load_bookmarks, save_bookmarks,
+        ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView, DaySyncUpdate,
+        RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed, SyncPhase,
+        api_key_requirement_for_download, build_day_coverages, diff_missing_snapshot_keys,
+        load_bookmarks, save_bookmarks,
     };
     use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
     use crate::layout::LocalSnapshotEntry;
@@ -2055,6 +2122,7 @@ mod tests {
                     status: DatasetAccessStatus::Open,
                     public_cutoff_date: None,
                 }),
+                categories: Vec::new(),
                 dataset: "aster:BTCUSDT".into(),
             },
             RemoteDatasetEntry {
@@ -2067,6 +2135,7 @@ mod tests {
                     status: DatasetAccessStatus::Restricted,
                     public_cutoff_date: None,
                 }),
+                categories: Vec::new(),
                 dataset: "binance:ETHUSDT".into(),
             },
         ];
@@ -2104,6 +2173,7 @@ mod tests {
                     status: DatasetAccessStatus::Preview,
                     public_cutoff_date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
                 }),
+                categories: Vec::new(),
                 dataset: "aster:BTCUSDT".into(),
             },
             RemoteDatasetEntry {
@@ -2116,6 +2186,7 @@ mod tests {
                     status: DatasetAccessStatus::Restricted,
                     public_cutoff_date: None,
                 }),
+                categories: Vec::new(),
                 dataset: "binance:ETHUSDT".into(),
             },
         ];
@@ -2159,6 +2230,7 @@ mod tests {
                         status: DatasetAccessStatus::Open,
                         public_cutoff_date: None,
                     }),
+                    categories: Vec::new(),
                     dataset: "aster:BTCUSDT".into(),
                 },
                 RemoteDatasetEntry {
@@ -2171,6 +2243,7 @@ mod tests {
                         status: DatasetAccessStatus::Open,
                         public_cutoff_date: None,
                     }),
+                    categories: Vec::new(),
                     dataset: bookmarked.clone(),
                 },
             ],
@@ -2205,6 +2278,7 @@ mod tests {
                         status: DatasetAccessStatus::Open,
                         public_cutoff_date: None,
                     }),
+                    categories: Vec::new(),
                     dataset: "aster:BTCUSDT".into(),
                 },
                 RemoteDatasetEntry {
@@ -2217,6 +2291,7 @@ mod tests {
                         status: DatasetAccessStatus::Open,
                         public_cutoff_date: None,
                     }),
+                    categories: Vec::new(),
                     dataset: bookmarked.clone(),
                 },
             ],
@@ -2237,6 +2312,125 @@ mod tests {
             load_bookmarks(tempdir.path()).expect("load bookmarks"),
             BTreeSet::from([bookmarked])
         );
+    }
+
+    #[test]
+    fn category_carousel_cycles_through_bookmarks_and_catalog_categories() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let bookmarked = "binance:ETHUSDT".to_string();
+        save_bookmarks(tempdir.path(), &BTreeSet::from([bookmarked.clone()]))
+            .expect("save bookmarks");
+
+        let mut app = RemoteListTui::new(
+            vec![
+                RemoteDatasetEntry {
+                    exchange: "aster".into(),
+                    asset: "BTCUSDT".into(),
+                    start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                    end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                    source: Some("manifest".into()),
+                    access: Some(DatasetAccess {
+                        status: DatasetAccessStatus::Open,
+                        public_cutoff_date: None,
+                    }),
+                    categories: vec!["Spot".into()],
+                    dataset: "aster:BTCUSDT".into(),
+                },
+                RemoteDatasetEntry {
+                    exchange: "binance".into(),
+                    asset: "ETHUSDT".into(),
+                    start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                    end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                    source: Some("manifest".into()),
+                    access: Some(DatasetAccess {
+                        status: DatasetAccessStatus::Open,
+                        public_cutoff_date: None,
+                    }),
+                    categories: vec!["Futures".into()],
+                    dataset: bookmarked.clone(),
+                },
+            ],
+            Vec::<LocalSnapshotEntry>::new(),
+            Vec::new(),
+            tempdir.path().to_path_buf(),
+            4,
+            RemoteTuiSeed::default(),
+        );
+
+        assert_eq!(
+            app.categories
+                .iter()
+                .map(BrowserCategory::label)
+                .collect::<Vec<_>>(),
+            vec!["All", "Bookmarks", "Futures", "Spot"]
+        );
+        assert_eq!(app.selected_category().label(), "All");
+
+        app.cycle_category(1);
+        assert_eq!(app.selected_category().label(), "Bookmarks");
+        assert_eq!(app.filtered_indices.len(), 1);
+        assert_eq!(
+            app.selected_dataset()
+                .map(|dataset| dataset.dataset.as_str()),
+            Some(bookmarked.as_str())
+        );
+
+        app.cycle_category(1);
+        assert_eq!(app.selected_category().label(), "Futures");
+        assert_eq!(app.filtered_indices.len(), 1);
+        assert_eq!(
+            app.selected_dataset()
+                .map(|dataset| dataset.dataset.as_str()),
+            Some(bookmarked.as_str())
+        );
+
+        app.cycle_category(1);
+        assert_eq!(app.selected_category().label(), "Spot");
+        assert_eq!(app.filtered_indices.len(), 1);
+        assert_eq!(
+            app.selected_dataset()
+                .map(|dataset| dataset.dataset.as_str()),
+            Some("aster:BTCUSDT")
+        );
+    }
+
+    #[test]
+    fn removing_bookmark_refreshes_bookmarks_category() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let bookmarked = "binance:ETHUSDT".to_string();
+        save_bookmarks(tempdir.path(), &BTreeSet::from([bookmarked.clone()]))
+            .expect("save bookmarks");
+
+        let mut app = RemoteListTui::new(
+            vec![RemoteDatasetEntry {
+                exchange: "binance".into(),
+                asset: "ETHUSDT".into(),
+                start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                source: Some("manifest".into()),
+                access: Some(DatasetAccess {
+                    status: DatasetAccessStatus::Open,
+                    public_cutoff_date: None,
+                }),
+                categories: vec!["Futures".into()],
+                dataset: bookmarked.clone(),
+            }],
+            Vec::<LocalSnapshotEntry>::new(),
+            Vec::new(),
+            tempdir.path().to_path_buf(),
+            4,
+            RemoteTuiSeed::default(),
+        );
+
+        app.cycle_category(1);
+        assert_eq!(app.selected_category().label(), "Bookmarks");
+        assert_eq!(app.filtered_indices.len(), 1);
+
+        app.toggle_current_bookmark().expect("toggle bookmark");
+
+        assert!(app.filtered_indices.is_empty());
+        assert!(app.selected_dataset().is_none());
+        assert!(!app.is_bookmarked(bookmarked.as_str()));
     }
 
     #[test]
@@ -2306,6 +2500,7 @@ mod tests {
                 status: DatasetAccessStatus::Preview,
                 public_cutoff_date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
             }),
+            categories: Vec::new(),
             dataset: "aster:ASTERUSDT".into(),
         };
         let tempdir = tempfile::TempDir::new().expect("tempdir");
