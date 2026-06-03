@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -11,6 +12,14 @@ use crate::error::{Result, TickError};
 const DEFAULT_BASE_URL: &str = "https://api.polaris.supply";
 const DEFAULT_CONCURRENCY: usize = 4;
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
+const APP_NAME: &str = "polaris";
+const LEGACY_APP_NAME: &str = "tick";
+const ROOT_ENV_VAR: &str = "POLARIS_ROOT";
+const LEGACY_ROOT_ENV_VAR: &str = "TICK_ROOT";
+const CONCURRENCY_ENV_VAR: &str = "POLARIS_CONCURRENCY";
+const LEGACY_CONCURRENCY_ENV_VAR: &str = "TICK_CONCURRENCY";
+const TIMEOUT_ENV_VAR: &str = "POLARIS_TIMEOUT_SECS";
+const LEGACY_TIMEOUT_ENV_VAR: &str = "TICK_TIMEOUT_SECS";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -61,20 +70,20 @@ impl Config {
             (None, None) => (None, None),
         };
 
-        let root = match reader("TICK_ROOT") {
+        let root = match preferred_env(&mut reader, ROOT_ENV_VAR, LEGACY_ROOT_ENV_VAR) {
             Some(value) if !value.trim().is_empty() => PathBuf::from(value),
             _ => default_root()?,
         };
 
         let concurrency = parse_positive_usize(
-            reader("TICK_CONCURRENCY"),
+            preferred_env(&mut reader, CONCURRENCY_ENV_VAR, LEGACY_CONCURRENCY_ENV_VAR),
             DEFAULT_CONCURRENCY,
-            "TICK_CONCURRENCY",
+            CONCURRENCY_ENV_VAR,
         )?;
         let timeout_secs = parse_positive_u64(
-            reader("TICK_TIMEOUT_SECS"),
+            preferred_env(&mut reader, TIMEOUT_ENV_VAR, LEGACY_TIMEOUT_ENV_VAR),
             DEFAULT_TIMEOUT_SECS,
-            "TICK_TIMEOUT_SECS",
+            TIMEOUT_ENV_VAR,
         )?;
 
         Ok(Self {
@@ -102,9 +111,30 @@ impl CredentialStore for NoopCredentialStore {
 }
 
 pub fn default_root() -> Result<PathBuf> {
-    let dirs = ProjectDirs::from("", "", "tick")
+    let primary_root = project_data_dir(APP_NAME)?;
+    let legacy_root = project_data_dir(LEGACY_APP_NAME)?;
+    Ok(select_default_root(primary_root, legacy_root))
+}
+
+fn preferred_env<F>(reader: &mut F, primary: &str, legacy: &str) -> Option<String>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    reader(primary).or_else(|| reader(legacy))
+}
+
+fn project_data_dir(app_name: &str) -> Result<PathBuf> {
+    let dirs = ProjectDirs::from("", "", app_name)
         .ok_or_else(|| TickError::Other(anyhow!("unable to determine platform data directory")))?;
     Ok(dirs.data_local_dir().to_path_buf())
+}
+
+fn select_default_root(primary_root: PathBuf, legacy_root: PathBuf) -> PathBuf {
+    if fs::metadata(&primary_root).is_ok() || fs::metadata(&legacy_root).is_err() {
+        primary_root
+    } else {
+        legacy_root
+    }
 }
 
 fn parse_positive_usize(raw: Option<String>, default: usize, name: &str) -> Result<usize> {
@@ -149,13 +179,18 @@ fn parse_positive_u64(raw: Option<String>, default: u64, name: &str) -> Result<u
 mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::time::Duration;
 
-    use directories::ProjectDirs;
+    use tempfile::TempDir;
 
     use crate::auth::CredentialStore;
     use crate::error::Result;
 
-    use super::{ApiKeySource, Config, default_root};
+    use super::{
+        APP_NAME, ApiKeySource, CONCURRENCY_ENV_VAR, Config, LEGACY_APP_NAME,
+        LEGACY_CONCURRENCY_ENV_VAR, LEGACY_ROOT_ENV_VAR, LEGACY_TIMEOUT_ENV_VAR, ROOT_ENV_VAR,
+        TIMEOUT_ENV_VAR, default_root, project_data_dir, select_default_root,
+    };
 
     #[derive(Debug)]
     struct FakeCredentialStore {
@@ -174,16 +209,30 @@ mod tests {
 
     #[test]
     fn default_root_matches_directories_crate() {
-        let expected = ProjectDirs::from("", "", "tick")
-            .expect("project dirs")
-            .data_local_dir()
-            .to_path_buf();
+        let primary = project_data_dir(APP_NAME).expect("primary root");
+        let legacy = project_data_dir(LEGACY_APP_NAME).expect("legacy root");
+        let expected = if std::fs::metadata(&primary).is_ok() || std::fs::metadata(&legacy).is_err()
+        {
+            primary
+        } else {
+            legacy
+        };
         assert_eq!(default_root().expect("default root"), expected);
     }
 
     #[test]
     fn root_override_is_respected() {
-        let values = HashMap::from([("TICK_ROOT".to_string(), "/tmp/tick-root".to_string())]);
+        let values = HashMap::from([(ROOT_ENV_VAR.to_string(), "/tmp/polaris-root".to_string())]);
+        let config = Config::from_reader(|key| values.get(key).cloned()).expect("config");
+        assert_eq!(config.root, PathBuf::from("/tmp/polaris-root"));
+    }
+
+    #[test]
+    fn legacy_root_override_is_respected() {
+        let values = HashMap::from([(
+            LEGACY_ROOT_ENV_VAR.to_string(),
+            "/tmp/tick-root".to_string(),
+        )]);
         let config = Config::from_reader(|key| values.get(key).cloned()).expect("config");
         assert_eq!(config.root, PathBuf::from("/tmp/tick-root"));
     }
@@ -210,5 +259,31 @@ mod tests {
             Config::from_reader_and_store(|key| values.get(key).cloned(), &store).expect("config");
         assert_eq!(config.api_key.as_deref(), Some("stored-key"));
         assert_eq!(config.api_key_source, Some(ApiKeySource::CredentialStore));
+    }
+
+    #[test]
+    fn new_env_vars_override_legacy_runtime_settings() {
+        let values = HashMap::from([
+            (CONCURRENCY_ENV_VAR.to_string(), "8".to_string()),
+            (LEGACY_CONCURRENCY_ENV_VAR.to_string(), "2".to_string()),
+            (TIMEOUT_ENV_VAR.to_string(), "90".to_string()),
+            (LEGACY_TIMEOUT_ENV_VAR.to_string(), "30".to_string()),
+        ]);
+        let config = Config::from_reader(|key| values.get(key).cloned()).expect("config");
+        assert_eq!(config.concurrency, 8);
+        assert_eq!(config.timeout, Duration::from_secs(90));
+    }
+
+    #[test]
+    fn select_default_root_prefers_existing_legacy_root_until_new_root_exists() {
+        let tempdir = TempDir::new().expect("tempdir");
+        let primary = tempdir.path().join("polaris");
+        let legacy = tempdir.path().join("tick");
+        std::fs::create_dir_all(&legacy).expect("legacy dir");
+
+        assert_eq!(select_default_root(primary.clone(), legacy.clone()), legacy);
+
+        std::fs::create_dir_all(&primary).expect("primary dir");
+        assert_eq!(select_default_root(primary.clone(), legacy), primary);
     }
 }

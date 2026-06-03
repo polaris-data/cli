@@ -2,8 +2,9 @@
 set -euo pipefail
 
 REPO="spectrum-ec/tick"
-PROJECT="tick"
-DEFAULT_INSTALL_DIR="${HOME}/.tick/bin"
+PROJECT="polaris"
+DEFAULT_INSTALL_DIR="${HOME}/.polaris/bin"
+LEGACY_INSTALL_DIR="${HOME}/.tick/bin"
 
 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
 REQUESTED_VERSION=""
@@ -12,21 +13,21 @@ usage() {
   cat <<'EOF'
 Usage: install.sh [--version <tag>] [--install-dir <path>]
 
-Install or update the latest tick release from GitHub Releases.
+Install or update the latest Polaris CLI release from GitHub Releases.
 
 Options:
   --version <tag>      Install a specific release tag, for example: v0.1.0
-  --install-dir <dir>  Install directory for the tick binary
+  --install-dir <dir>  Install directory for the polaris binary
   -h, --help           Show this help text
 EOF
 }
 
 log() {
-  printf 'tick-install: %s\n' "$*" >&2
+  printf 'polaris-install: %s\n' "$*" >&2
 }
 
 fail() {
-  printf 'tick-install: %s\n' "$*" >&2
+  printf 'polaris-install: %s\n' "$*" >&2
   exit 1
 }
 
@@ -70,6 +71,13 @@ parse_args() {
         ;;
     esac
   done
+}
+
+apply_default_install_dir() {
+  if [[ "$INSTALL_DIR" == "$DEFAULT_INSTALL_DIR" && -d "$LEGACY_INSTALL_DIR" ]]; then
+    INSTALL_DIR="$LEGACY_INSTALL_DIR"
+    log "reusing legacy install directory ${LEGACY_INSTALL_DIR}"
+  fi
 }
 
 detect_target() {
@@ -190,6 +198,7 @@ install_binary() {
   cp "${extracted_dir}/${PROJECT}" "$install_tmp"
   chmod 0755 "$install_tmp"
   mv "$install_tmp" "${INSTALL_DIR}/${PROJECT}"
+  ln -sfn "${PROJECT}" "${INSTALL_DIR}/tick"
 }
 
 detect_profile() {
@@ -253,6 +262,7 @@ main() {
   require_command curl
   require_command tar
   parse_args "$@"
+  apply_default_install_dir
 
   target="$(detect_target)"
   version="$(resolve_version)"

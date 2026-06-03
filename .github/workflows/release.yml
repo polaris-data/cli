@@ -204,24 +204,24 @@ jobs:
 
           tag="${{ needs.validate.outputs.tag }}"
           target="${{ matrix.target }}"
-          archive_name="tick-${tag}-${target}.tar.gz"
+          archive_name="polaris-${tag}-${target}.tar.gz"
           build_dir="target/${target}/release"
           package_dir="$(mktemp -d)"
           verify_dir="$(mktemp -d)"
           trap 'rm -rf "${package_dir}" "${verify_dir}"' EXIT
 
           mkdir -p dist
-          cp "${build_dir}/tick" "${package_dir}/tick"
-          chmod 0755 "${package_dir}/tick"
-          tar -czf "dist/${archive_name}" -C "${package_dir}" tick
+          cp "${build_dir}/polaris" "${package_dir}/polaris"
+          chmod 0755 "${package_dir}/polaris"
+          tar -czf "dist/${archive_name}" -C "${package_dir}" polaris
 
           tar -xzf "dist/${archive_name}" -C "${verify_dir}"
-          "${verify_dir}/tick" --version
+          "${verify_dir}/polaris" --version
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
-          path: dist/tick-${{ needs.validate.outputs.tag }}-${{ matrix.target }}.tar.gz
+          path: dist/polaris-${{ needs.validate.outputs.tag }}-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
   publish:
@@ -244,7 +244,7 @@ jobs:
           set -euo pipefail
 
           cd dist
-          sha256sum tick-${{ needs.validate.outputs.tag }}-*.tar.gz > tick-${{ needs.validate.outputs.tag }}-checksums.txt
+          sha256sum polaris-${{ needs.validate.outputs.tag }}-*.tar.gz > polaris-${{ needs.validate.outputs.tag }}-checksums.txt
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -252,5 +252,5 @@ jobs:
           tag_name: ${{ needs.validate.outputs.tag }}
           generate_release_notes: true
           files: |
-            dist/tick-${{ needs.validate.outputs.tag }}-*.tar.gz
-            dist/tick-${{ needs.validate.outputs.tag }}-checksums.txt
+            dist/polaris-${{ needs.validate.outputs.tag }}-*.tar.gz
+            dist/polaris-${{ needs.validate.outputs.tag }}-checksums.txt

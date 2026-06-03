@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use tick::app;
+use polaris::app;
 
 #[tokio::main]
 async fn main() -> ExitCode {

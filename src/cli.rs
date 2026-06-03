@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "tick", version, about = "Sync Polaris market data snapshots")]
+#[command(
+    name = "polaris",
+    version,
+    about = "Sync Polaris market data snapshots"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -114,12 +118,12 @@ mod tests {
     #[test]
     fn update_command_parses_with_optional_overrides() {
         let cli = Cli::try_parse_from([
-            "tick",
+            "polaris",
             "update",
             "--version",
             "v0.2.0",
             "--install-dir",
-            "/tmp/tick",
+            "/tmp/polaris",
         ])
         .expect("cli");
 
@@ -128,7 +132,7 @@ mod tests {
                 assert_eq!(args.version.as_deref(), Some("v0.2.0"));
                 assert_eq!(
                     args.install_dir.as_deref(),
-                    Some(std::path::Path::new("/tmp/tick"))
+                    Some(std::path::Path::new("/tmp/polaris"))
                 );
             }
             other => panic!("expected update command, got {other:?}"),

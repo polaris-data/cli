@@ -1,19 +1,19 @@
-# tick
+# polaris
 
-`tick` is a Rust CLI for syncing Polaris standardized event snapshot files to a local canonical dataset tree.
+`polaris` is a Rust CLI for syncing Polaris standardized event snapshot files to a local canonical dataset tree.
 
 It is intentionally narrow in v1:
-- bare `tick` opens the remote dataset browser TUI in a real terminal.
-- `list` prints remote exchange and asset datasets in plain CLI output.
-- `list local` shows the local snapshots currently present under the managed dataset root.
-- `reset` clears all local dataset state managed by `tick`.
-- `sync` downloads missing snapshot files for a requested remote time range.
+- bare `polaris` opens the remote dataset browser TUI in a real terminal
+- `list` prints remote exchange and asset datasets in plain CLI output
+- `list local` shows the local snapshots currently present under the managed dataset root
+- `reset` clears all local dataset state managed by `polaris`
+- `sync` downloads missing snapshot files for a requested remote time range
 
 ## Requirements
 
 - Rust toolchain with `cargo`
-- Network access to the Polaris API
-- Optional: a Polaris API key if you want to use authenticated Polaris access
+- network access to the Polaris API
+- optional: a Polaris API key if you want authenticated Polaris access
 
 ## Install And Update
 
@@ -23,12 +23,14 @@ Install the latest GitHub Release:
 curl -fsSL https://raw.githubusercontent.com/spectrum-ec/tick/main/install.sh | bash
 ```
 
+The repo path still says `tick` until the repository itself is renamed. The installed CLI name is `polaris`.
+
 Re-run the same command later to update to the newest release.
 
 Or, once installed, update in place from the CLI:
 
 ```bash
-tick update
+polaris update
 ```
 
 Install a pinned version:
@@ -43,13 +45,17 @@ Install into a custom directory:
 curl -fsSL https://raw.githubusercontent.com/spectrum-ec/tick/main/install.sh | bash -s -- --install-dir "$HOME/.local/bin"
 ```
 
-Default install location:
+Default install location for new installs:
 
 ```text
-~/.tick/bin/tick
+~/.polaris/bin/polaris
 ```
 
-The installer adds `~/.tick/bin` to your shell profile if needed:
+Compatibility behavior:
+- if `~/.tick/bin` already exists, the installer reuses that legacy install directory
+- the installer also creates a `tick` symlink pointing at `polaris` for migration
+
+The installer adds the install directory to your shell profile if needed:
 - zsh: `~/.zshenv` or `$ZDOTDIR/.zshenv`
 - bash: `~/.bashrc`
 - fish: `~/.config/fish/config.fish`
@@ -75,7 +81,7 @@ Run the TUI in development:
 cargo run --
 ```
 
-Bare `tick` opens the interactive TUI in a real terminal. If stdout/stdin are not terminals, it falls back to plain output.
+Bare `polaris` opens the interactive TUI in a real terminal. If stdout/stdin are not terminals, it falls back to plain output.
 
 Run remote list output in development:
 
@@ -89,311 +95,191 @@ Run `list local` in development:
 cargo run -- list local
 ```
 
-Run `sync` in development:
-
-```bash
-cargo run -- sync \
-  --exchange aster \
-  --asset BTCUSDT \
-  --from 2026-06-01T00:00:00Z \
-  --to 2026-06-02T00:00:00Z
-```
-
-Build a development binary:
+Build debug and release binaries directly:
 
 ```bash
 cargo build
-```
+./target/debug/polaris
 
-The binary will be available at:
-
-```bash
-./target/debug/tick
-```
-
-Build an optimized release binary:
-
-```bash
 cargo build --release
-```
-
-The release binary will be available at:
-
-```bash
-./target/release/tick
-```
-
-Use the compiled binary directly:
-
-```bash
-./target/release/tick --help
-./target/release/tick list --help
-./target/release/tick list local --help
-./target/release/tick reset --help
-./target/release/tick sync --help
+./target/release/polaris
 ```
 
 ## Commands
 
-Top-level help:
-
-```bash
-tick --help
-```
-
-Current command surface:
-
 ```text
-tick
-tick account set-key
-tick account status
-tick list [--exchange <EXCHANGE>] [--asset <ASSET>] [--search <QUERY>] [--limit <N>] [--json]
-tick list local [--exchange <EXCHANGE>] [--asset <ASSET>] [--date <YYYY-MM-DD>] [--json]
-tick reset [--json]
-tick sync --exchange <EXCHANGE> --asset <ASSET> --from <FROM> --to <TO> [--json] [--concurrency <N>]
-tick update [--version <TAG>] [--install-dir <DIR>]
+polaris --help
+
+polaris
+polaris account set-key
+polaris account status
+polaris list [--exchange <EXCHANGE>] [--asset <ASSET>] [--search <QUERY>] [--limit <N>] [--json]
+polaris list local [--exchange <EXCHANGE>] [--asset <ASSET>] [--date <YYYY-MM-DD>] [--json]
+polaris reset [--json]
+polaris sync --exchange <EXCHANGE> --asset <ASSET> --from <FROM> --to <TO> [--json] [--concurrency <N>]
+polaris update [--version <TAG>] [--install-dir <DIR>]
 ```
 
-### `tick`
+### `polaris`
 
-Opens the interactive remote dataset browser TUI.
+Opens the interactive remote dataset browser TUI when running in a real terminal. If no TUI can be rendered, it falls back to plain CLI output.
 
-Keys:
-- type to search
-- `Backspace` to edit search
-- `Up` / `Down` to move selection
-- `Enter` on a dataset to open its day-coverage view
-- in dataset view: `Enter` syncs the selected UTC day
-- in dataset view: `Left` / `Right` moves by day, `Up` / `Down` by week
-- `q` or `Esc` to quit or back out
-
-### `list`
+### `polaris list`
 
 Lists remote datasets available from Polaris in plain CLI output.
-
-Each result is an `exchange:asset` pair with remote coverage timestamps.
-
-Optional filters:
-- `--exchange <EXCHANGE>`
-- `--asset <ASSET>`
-- `--search <QUERY>`
-- `--limit <N>`
-
-Example:
-
-```bash
-./target/debug/tick list --json
-```
-
-Filtered example:
-
-```bash
-./target/debug/tick list \
-  --exchange aster \
-  --search btc
-```
-
-### `update`
-
-Downloads the latest `install.sh` from GitHub and re-runs the release installer.
-
-By default, `tick update` tries to preserve the current install directory when running from an installed `tick` binary. You can override that behavior explicitly.
 
 Examples:
 
 ```bash
-tick update
-tick update --version v0.1.0
-tick update --install-dir "$HOME/.local/bin"
-```
+./target/debug/polaris list --json
 
-### `account set-key`
-
-Prompts for a Polaris API key and stores it in the OS credential store. Stored credentials are used automatically when `POLARIS_API_KEY` is not set.
-
-Example:
-
-```bash
-./target/debug/tick account set-key
-```
-
-### `account status`
-
-Prints whether `tick` currently has a Polaris API key configured, and whether that credential came from `POLARIS_API_KEY` or the OS credential store.
-
-Example:
-
-```bash
-./target/debug/tick account status
-```
-
-### `list local`
-
-Lists local snapshots already stored under `data/` in the managed root. Snapshot metadata is deduced from the file path and filename pattern when possible, including daily snapshot files where the UTC date is encoded in the filename instead of a directory segment.
-
-Optional filters:
-- `--exchange <EXCHANGE>`
-- `--asset <ASSET>`
-- `--date <YYYY-MM-DD>`
-
-Example:
-
-```bash
-./target/debug/tick list local --json
-```
-
-### `reset`
-
-Removes all local dataset state managed by `tick` under the configured root. This clears `data/`, `daily/`, `tmp/`, and `cache/`, but leaves the root directory and account credentials intact.
-
-Example:
-
-```bash
-./target/debug/tick reset
-```
-
-JSON output:
-
-```bash
-./target/debug/tick reset --json
-```
-
-Filtered example:
-
-```bash
-./target/debug/tick list local \
+./target/debug/polaris list \
   --exchange aster \
   --asset BTCUSDT \
-  --date 2026-06-01
+  --search btc \
+  --limit 25
 ```
 
-### `sync`
+### `polaris update`
 
-Fetches the remote standardized snapshot catalog for the requested range, compares it to the local dataset tree, then downloads only the missing snapshots.
+Downloads the release installer and updates the current CLI in place.
 
-After sync completes, `tick` also automatically materializes full-day local files under `daily/` for any UTC day in the effective sync range that is fully present locally. When Polaris serves a day-level standardized snapshot directly, that file is reused as the day artifact.
+By default, `polaris update` tries to preserve the current install directory when running from an installed `polaris` binary. If it is run from a legacy `tick` binary, it preserves that legacy install directory. You can override that behavior explicitly.
+
+Examples:
+
+```bash
+polaris update
+polaris update --version v0.1.0
+polaris update --install-dir "$HOME/.local/bin"
+```
+
+### `polaris account set-key`
+
+Prompts for a Polaris API key and stores it in the OS credential store.
 
 Example:
 
 ```bash
-./target/debug/tick sync \
+./target/debug/polaris account set-key
+```
+
+### `polaris account status`
+
+Prints whether `polaris` currently has a Polaris API key configured, and whether that credential came from `POLARIS_API_KEY` or the OS credential store.
+
+Example:
+
+```bash
+./target/debug/polaris account status
+```
+
+### `polaris list local`
+
+Lists local snapshots under the configured root.
+
+Example:
+
+```bash
+./target/debug/polaris list local --json
+```
+
+### `polaris reset`
+
+Removes all local dataset state managed by `polaris` under the configured root. This clears `data/`, `daily/`, `tmp/`, and `cache/`, but leaves the root directory and account credentials intact.
+
+Examples:
+
+```bash
+./target/debug/polaris reset
+./target/debug/polaris reset --json
+```
+
+### `polaris sync`
+
+Downloads missing snapshots for the requested dataset and time range.
+
+After sync completes, `polaris` also automatically materializes full-day local files under `daily/` for any UTC day in the effective sync range that is fully present locally. When Polaris serves a day-level standardized snapshot directly, that file is reused as the day artifact.
+
+Examples:
+
+```bash
+./target/debug/polaris sync \
+  --exchange aster \
+  --asset BTCUSDT \
+  --from 2026-06-01T00:00:00Z \
+  --to 2026-06-02T00:00:00Z
+
+./target/debug/polaris sync \
   --exchange aster \
   --asset BTCUSDT \
   --from 2026-06-01T00:00:00Z \
   --to 2026-06-02T00:00:00Z \
-  --concurrency 4
+  --json \
+  --concurrency 8
 ```
 
-JSON output:
-
-```bash
-./target/debug/tick sync \
-  --exchange aster \
-  --asset BTCUSDT \
-  --from 2026-06-01T00:00:00Z \
-  --to 2026-06-02T00:00:00Z \
-  --json
-```
-
-## Environment Variables
+## Environment
 
 - `POLARIS_BASE_URL`
-  - Default: `https://api.polaris.supply`
+  - default: `https://api.polaris.supply`
 - `POLARIS_API_KEY`
-  - Optional bearer token for authenticated Polaris requests
-  - Takes precedence over the stored credential from `tick account set-key`
-- `TICK_ROOT`
-  - Optional override for the local dataset root
-- `TICK_CONCURRENCY`
-  - Default: `4`
-- `TICK_TIMEOUT_SECS`
-  - Default: `60`
+  - optional bearer token for authenticated Polaris requests
+  - takes precedence over the stored credential from `polaris account set-key`
+- `POLARIS_ROOT`
+  - overrides the local dataset root directory
+- `POLARIS_CONCURRENCY`
+  - default sync concurrency when `--concurrency` is not provided
+- `POLARIS_TIMEOUT_SECS`
+  - request timeout in seconds
 
-If `POLARIS_API_KEY` is unset, `tick` falls back to the Polaris API key stored in the OS credential store.
+Legacy compatibility:
+- `TICK_ROOT`, `TICK_CONCURRENCY`, and `TICK_TIMEOUT_SECS` are still accepted
+- if `POLARIS_API_KEY` is unset, `polaris` also falls back to the legacy `tick` OS credential entry when needed
+- if the new default data root does not exist but the legacy `tick` data root does, `polaris` keeps using the legacy root automatically
 
 Example:
 
 ```bash
 export POLARIS_BASE_URL="https://api.polaris.supply"
-export POLARIS_API_KEY="your_key_here"
-export TICK_ROOT="$HOME/.local/share/tick-dev"
-export TICK_CONCURRENCY="8"
-export TICK_TIMEOUT_SECS="60"
+export POLARIS_ROOT="$HOME/.local/share/polaris-dev"
+export POLARIS_CONCURRENCY="8"
+export POLARIS_TIMEOUT_SECS="60"
+
+./target/debug/polaris
+./target/debug/polaris list
+./target/debug/polaris list local
+./target/debug/polaris sync --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z
 ```
 
-Then run:
+## Local Layout
 
-```bash
-./target/debug/tick
-./target/debug/tick list
-./target/debug/tick list local
-./target/debug/tick sync --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z
-```
+By default `polaris` stores data under the platform app-data directory unless `POLARIS_ROOT` is set.
 
-## Local Storage Layout
+New default paths:
+- macOS: `~/Library/Application Support/polaris`
+- Linux: `$XDG_DATA_HOME/polaris` or `~/.local/share/polaris`
+- Windows: `%APPDATA%\polaris`
 
-By default `tick` stores data under the platform app-data directory unless `TICK_ROOT` is set.
-
-Examples:
-- macOS: `~/Library/Application Support/tick`
-- Linux: `$XDG_DATA_HOME/tick` or `~/.local/share/tick`
-- Windows: `%APPDATA%\tick`
-
-Within that root, `tick` owns this layout:
-
-- `data/<remote-key>`
-- `daily/<exchange>/<asset>/<date>.jsonl.zst`
-- `tmp/<sha256(remote-key)>.part`
-- `locks/sync.lock`
-- `cache/catalog/<exchange>/<asset>.json`
-
-Example snapshot path:
+Within that root, `polaris` owns this layout:
 
 ```text
-data/bronze/aster/BTCUSDT/2026-06-01/aster_BTCUSDT_s20260601T000000Z_e20260601T000959Z.jsonl.zst
+<root>/
+  data/
+  daily/
+  tmp/
+  cache/
 ```
 
-Example day-level snapshot path:
+If a legacy `tick` data root already exists and the new `polaris` root does not, the CLI reuses the legacy root during migration.
 
-```text
-data/events/aster/BTCUSDT/aster_BTCUSDT_2026-06-01.jsonl.zst
-```
+## Release
 
-Example daily materialized path:
+`polaris` release assets are built by a single GitHub Actions workflow from the crate version in `Cargo.toml`.
 
-```text
-daily/aster/BTCUSDT/2026-06-01.jsonl.zst
-```
-
-## Exit Codes
-
-- `0`: success
-- `1`: runtime, config, lock, or network error
-- `2`: dataset unavailable or requested range has no overlap with remote coverage
-
-## Test
-
-Run formatting and tests locally:
-
-```bash
-cargo fmt
-cargo test
-```
-
-## Release Process
-
-`tick` release assets are built by a single GitHub Actions workflow from the crate version in `Cargo.toml`.
-
-Maintainership flow:
-
-1. Update the crate version in `Cargo.toml`.
-2. Commit the release change and push it to `main`.
-3. The release workflow detects the version bump, creates the matching tag, and publishes the release.
-4. GitHub Actions publishes:
-   - `tick-v{version}-x86_64-apple-darwin.tar.gz`
-   - `tick-v{version}-aarch64-apple-darwin.tar.gz`
-   - `tick-v{version}-x86_64-unknown-linux-gnu.tar.gz`
-   - `tick-v{version}-aarch64-unknown-linux-gnu.tar.gz`
-   - `tick-v{version}-checksums.txt`
-
-The same workflow also supports manual tag pushes and `workflow_dispatch`, and it still validates that the release tag matches the version declared in `Cargo.toml`.
+Expected assets:
+- `polaris-v{version}-x86_64-apple-darwin.tar.gz`
+- `polaris-v{version}-aarch64-apple-darwin.tar.gz`
+- `polaris-v{version}-x86_64-unknown-linux-gnu.tar.gz`
+- `polaris-v{version}-aarch64-unknown-linux-gnu.tar.gz`
+- `polaris-v{version}-checksums.txt`

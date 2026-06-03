@@ -125,7 +125,7 @@ async fn run_update(args: UpdateArgs) -> Result<u8> {
 
     if !status.success() {
         return Err(TickError::Other(anyhow!(
-            "tick update failed with status {status}"
+            "polaris update failed with status {status}"
         )));
     }
 
@@ -197,8 +197,9 @@ fn infer_current_install_dir() -> Result<Option<PathBuf>> {
 }
 
 fn infer_install_dir_from_executable(executable: &Path) -> Option<PathBuf> {
-    if executable.file_name()? != "tick" {
-        return None;
+    match executable.file_name()?.to_str() {
+        Some("polaris") | Some("tick") => {}
+        _ => return None,
     }
 
     let install_dir = executable.parent()?;
@@ -250,7 +251,7 @@ fn create_update_temp_dir() -> Result<UpdateTempDir> {
 
     for attempt in 0..32 {
         let path = base.join(format!(
-            "tick-update-{}-{timestamp}-{attempt}",
+            "polaris-update-{}-{timestamp}-{attempt}",
             std::process::id()
         ));
         match std::fs::create_dir(&path) {
@@ -826,7 +827,7 @@ mod tests {
     fn local_list_json_shape_is_stable() {
         let output = LocalListOutput {
             command: "list local",
-            root: "/tmp/tick".into(),
+            root: "/tmp/polaris".into(),
             filters: LocalListFilters {
                 exchange: Some("aster".into()),
                 asset: None,
@@ -835,7 +836,7 @@ mod tests {
             snapshot_total: 1,
             snapshots: vec![LocalSnapshotEntry {
                 key: "bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst".into(),
-                path: "/tmp/tick/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst".into(),
+                path: "/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst".into(),
                 filename: "file.jsonl.zst".into(),
                 exchange: Some("aster".into()),
                 asset: Some("BTCUSDT".into()),
@@ -847,7 +848,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"list local\",\"root\":\"/tmp/tick\",\"filters\":{\"exchange\":\"aster\",\"asset\":null,\"date\":null},\"snapshot_total\":1,\"snapshots\":[{\"key\":\"bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"path\":\"/tmp/tick/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"filename\":\"file.jsonl.zst\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"date\":\"2026-06-01\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\"}]}"
+            "{\"command\":\"list local\",\"root\":\"/tmp/polaris\",\"filters\":{\"exchange\":\"aster\",\"asset\":null,\"date\":null},\"snapshot_total\":1,\"snapshots\":[{\"key\":\"bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"path\":\"/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"filename\":\"file.jsonl.zst\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"date\":\"2026-06-01\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\"}]}"
         );
     }
 
@@ -893,6 +894,13 @@ mod tests {
     #[test]
     fn infer_install_dir_uses_parent_for_installed_binary() {
         let install_dir =
+            infer_install_dir_from_executable(Path::new("/Users/test/.polaris/bin/polaris"));
+        assert_eq!(install_dir, Some(PathBuf::from("/Users/test/.polaris/bin")));
+    }
+
+    #[test]
+    fn infer_install_dir_accepts_legacy_binary_name() {
+        let install_dir =
             infer_install_dir_from_executable(Path::new("/Users/test/.tick/bin/tick"));
         assert_eq!(install_dir, Some(PathBuf::from("/Users/test/.tick/bin")));
     }
@@ -900,15 +908,15 @@ mod tests {
     #[test]
     fn infer_install_dir_skips_non_release_binaries() {
         assert_eq!(
-            infer_install_dir_from_executable(Path::new("/repo/target/debug/tick")),
+            infer_install_dir_from_executable(Path::new("/repo/target/debug/polaris")),
             None
         );
         assert_eq!(
-            infer_install_dir_from_executable(Path::new("/repo/target/release/tick")),
+            infer_install_dir_from_executable(Path::new("/repo/target/release/polaris")),
             None
         );
         assert_eq!(
-            infer_install_dir_from_executable(Path::new("/usr/local/bin/not-tick")),
+            infer_install_dir_from_executable(Path::new("/usr/local/bin/not-polaris")),
             None
         );
     }
@@ -920,7 +928,7 @@ mod tests {
             "/repo/target/release"
         )));
         assert!(!looks_like_cargo_target_dir(Path::new(
-            "/Users/test/.tick/bin"
+            "/Users/test/.polaris/bin"
         )));
     }
 
@@ -981,7 +989,7 @@ mod tests {
                 from: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 to: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
             },
-            root: "/tmp/tick".into(),
+            root: "/tmp/polaris".into(),
             remote_total: 2,
             downloaded_total: 1,
             skipped_total: 1,
@@ -997,7 +1005,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"sync\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/tick\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"materialized_days_total\":1,\"materialization_incomplete_days_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
+            "{\"command\":\"sync\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/polaris\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"materialized_days_total\":1,\"materialization_incomplete_days_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
         );
     }
 
@@ -1005,20 +1013,20 @@ mod tests {
     fn reset_json_shape_is_stable() {
         let output = ResetOutput {
             command: "reset",
-            root: "/tmp/tick".into(),
+            root: "/tmp/polaris".into(),
             snapshot_total: 2,
             daily_artifact_total: 1,
             removed_roots: vec![
-                "/tmp/tick/data".into(),
-                "/tmp/tick/daily".into(),
-                "/tmp/tick/tmp".into(),
-                "/tmp/tick/cache".into(),
+                "/tmp/polaris/data".into(),
+                "/tmp/polaris/daily".into(),
+                "/tmp/polaris/tmp".into(),
+                "/tmp/polaris/cache".into(),
             ],
         };
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"reset\",\"root\":\"/tmp/tick\",\"snapshot_total\":2,\"daily_artifact_total\":1,\"removed_roots\":[\"/tmp/tick/data\",\"/tmp/tick/daily\",\"/tmp/tick/tmp\",\"/tmp/tick/cache\"]}"
+            "{\"command\":\"reset\",\"root\":\"/tmp/polaris\",\"snapshot_total\":2,\"daily_artifact_total\":1,\"removed_roots\":[\"/tmp/polaris/data\",\"/tmp/polaris/daily\",\"/tmp/polaris/tmp\",\"/tmp/polaris/cache\"]}"
         );
     }
 

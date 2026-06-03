@@ -13,12 +13,12 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-use tick::api::{CatalogAsset, CatalogExchange, CatalogResponse, PolarisClient, SnapshotEntry};
-use tick::config::Config;
-use tick::error::TickError;
-use tick::layout::Layout;
-use tick::planner::{LocalSnapshotState, TimeWindow, build_sync_plan};
-use tick::syncer::{acquire_sync_lock, execute_sync};
+use polaris::api::{CatalogAsset, CatalogExchange, CatalogResponse, PolarisClient, SnapshotEntry};
+use polaris::config::Config;
+use polaris::error::TickError;
+use polaris::layout::Layout;
+use polaris::planner::{LocalSnapshotState, TimeWindow, build_sync_plan};
+use polaris::syncer::{acquire_sync_lock, execute_sync};
 
 #[derive(Clone)]
 struct TestServerState {
