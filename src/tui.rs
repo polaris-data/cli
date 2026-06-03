@@ -238,6 +238,7 @@ enum DaySyncUpdate {
 
 #[derive(Debug)]
 enum ViewMode {
+    Splash,
     Browser,
     Dataset(DatasetView),
 }
@@ -296,7 +297,7 @@ impl RemoteListTui {
             status_message: None,
             active_sync: None,
             spinner_tick: 0,
-            mode: ViewMode::Browser,
+            mode: ViewMode::Splash,
             api_key_prompt: None,
         };
         app.recompute_filter();
@@ -344,7 +345,7 @@ impl RemoteListTui {
     fn dataset_view(&self) -> Option<&DatasetView> {
         match &self.mode {
             ViewMode::Dataset(view) => Some(view),
-            ViewMode::Browser => None,
+            ViewMode::Browser | ViewMode::Splash => None,
         }
     }
 
@@ -930,9 +931,13 @@ async fn run_event_loop(
                 }
                 match key.code {
                     KeyCode::Esc => match app.mode {
+                        ViewMode::Splash => {}
                         ViewMode::Browser => return Ok(()),
                         ViewMode::Dataset(_) => app.mode = ViewMode::Browser,
                     },
+                    KeyCode::Char(' ') if matches!(app.mode, ViewMode::Splash) => {
+                        app.mode = ViewMode::Browser;
+                    }
                     KeyCode::Enter => {
                         if matches!(app.mode, ViewMode::Browser) {
                             if let Err(err) = app.open_selected_dataset(&client).await {
@@ -990,6 +995,30 @@ async fn run_event_loop(
     }
 }
 
+fn render_splash(frame: &mut ratatui::Frame<'_>) {
+    let area = centered_rect(40, 5, frame.area());
+
+    let logo = vec![
+        Line::from(vec![Span::styled(
+            "Polaris",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Space to continue",
+            Style::default().fg(Color::Blue),
+        )]),
+    ];
+
+    let logo_block = Paragraph::new(logo)
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::NONE));
+    frame.render_widget(Clear, area);
+    frame.render_widget(logo_block, area);
+}
+
 fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     match app.dataset_view() {
         Some(view) => render_dataset_view(
@@ -999,7 +1028,11 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
             app.active_sync.as_ref(),
             app.spinner_tick,
         ),
-        None => render_browser(frame, app),
+        None => match app.mode {
+            ViewMode::Splash => render_splash(frame),
+            ViewMode::Browser => render_browser(frame, app),
+            _ => unreachable!(),
+        },
     }
 
     if let Some(prompt) = &app.api_key_prompt {
