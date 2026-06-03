@@ -20,10 +20,8 @@ It is intentionally narrow in v1:
 Install the latest GitHub Release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/spectrum-ec/tick/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash
 ```
-
-The repo path still says `tick` until the repository itself is renamed. The installed CLI name is `polaris`.
 
 Re-run the same command later to update to the newest release.
 
@@ -36,13 +34,13 @@ polaris update
 Install a pinned version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/spectrum-ec/tick/main/install.sh | bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --version v0.1.0
 ```
 
 Install into a custom directory:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/spectrum-ec/tick/main/install.sh | bash -s -- --install-dir "$HOME/.local/bin"
+curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --install-dir "$HOME/.local/bin"
 ```
 
 Default install location for new installs:
