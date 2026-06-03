@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::io::{self, IsTerminal, Stdout};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use anyhow::Context;
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
@@ -16,7 +18,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::widgets::block::Title;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, error::TryRecvError, unbounded_channel};
 
 use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
@@ -161,6 +163,11 @@ struct ApiKeyPromptState {
     access_message: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct BookmarkStore {
+    bookmarks: BTreeSet<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ApiKeyRequirement {
     Restricted,
@@ -249,6 +256,8 @@ struct RemoteListTui {
     filtered_indices: Vec<usize>,
     selected: usize,
     search: String,
+    bookmarks: BTreeSet<String>,
+    session_priority_bookmarks: BTreeSet<String>,
     local_summaries: BTreeMap<String, LocalDatasetSummary>,
     local_keys: BTreeMap<String, Vec<String>>,
     daily_artifacts: BTreeSet<String>,
@@ -281,6 +290,13 @@ impl RemoteListTui {
             }
         }
 
+        let (bookmarks, bookmark_status) = match load_bookmarks(&root) {
+            Ok(bookmarks) => (bookmarks, None),
+            Err(err) => (
+                BTreeSet::new(),
+                Some(format!("warning: failed to load bookmarks: {err}")),
+            ),
+        };
         let local_summaries = summarize_local_snapshots(&local_snapshots);
         let local_keys = group_local_snapshot_keys(local_snapshots);
         let daily_artifacts = group_local_daily_artifacts(local_daily_artifacts);
@@ -289,12 +305,14 @@ impl RemoteListTui {
             filtered_indices: Vec::new(),
             selected: 0,
             search,
+            bookmarks: bookmarks.clone(),
+            session_priority_bookmarks: bookmarks,
             local_summaries,
             local_keys,
             daily_artifacts,
             root,
             concurrency,
-            status_message: None,
+            status_message: bookmark_status,
             active_sync: None,
             spinner_tick: 0,
             mode: ViewMode::Splash,
@@ -305,6 +323,7 @@ impl RemoteListTui {
     }
 
     fn recompute_filter(&mut self) {
+        let selected_dataset = self.selected_dataset().map(|dataset| dataset.dataset.clone());
         self.filtered_indices = self
             .datasets
             .iter()
@@ -317,8 +336,21 @@ impl RemoteListTui {
                 }
             })
             .collect();
+        let datasets = &self.datasets;
+        let bookmarks = &self.session_priority_bookmarks;
+        self.filtered_indices.sort_by_key(|index| {
+            let dataset = &datasets[*index];
+            (!bookmarks.contains(dataset.dataset.as_str()), *index)
+        });
         if self.filtered_indices.is_empty() {
             self.selected = 0;
+        } else if let Some(selected_dataset) = selected_dataset
+            && let Some(position) = self
+                .filtered_indices
+                .iter()
+                .position(|index| self.datasets[*index].dataset == selected_dataset)
+        {
+            self.selected = position;
         } else if self.selected >= self.filtered_indices.len() {
             self.selected = self.filtered_indices.len() - 1;
         }
@@ -340,6 +372,38 @@ impl RemoteListTui {
         if self.selected + 1 < self.filtered_indices.len() {
             self.selected += 1;
         }
+    }
+
+    fn current_dataset_id(&self) -> Option<&str> {
+        match &self.mode {
+            ViewMode::Dataset(view) => Some(view.dataset.dataset.as_str()),
+            ViewMode::Browser | ViewMode::Splash => {
+                self.selected_dataset().map(|dataset| dataset.dataset.as_str())
+            }
+        }
+    }
+
+    fn is_bookmarked(&self, dataset: &str) -> bool {
+        self.bookmarks.contains(dataset)
+    }
+
+    fn toggle_current_bookmark(&mut self) -> Result<()> {
+        let Some(dataset) = self.current_dataset_id().map(str::to_string) else {
+            return Ok(());
+        };
+
+        let mut next = self.bookmarks.clone();
+        let message = if next.insert(dataset.clone()) {
+            format!("bookmarked {dataset}")
+        } else {
+            next.remove(&dataset);
+            format!("removed bookmark for {dataset}")
+        };
+
+        save_bookmarks(&self.root, &next)?;
+        self.bookmarks = next;
+        self.status_message = Some(message);
+        Ok(())
     }
 
     fn dataset_view(&self) -> Option<&DatasetView> {
@@ -971,18 +1035,27 @@ async fn run_event_loop(
                             view.move_selection(-1);
                         }
                     }
-                    KeyCode::Right | KeyCode::Tab => {
+                    KeyCode::Right => {
                         if let ViewMode::Dataset(view) = &mut app.mode {
                             view.move_selection(1);
                         }
                     }
+                    KeyCode::Tab => match app.mode {
+                        ViewMode::Browser => {
+                            if let Err(err) = app.toggle_current_bookmark() {
+                                app.status_message = Some(format!("error: {err}"));
+                            }
+                        }
+                        ViewMode::Dataset(ref mut view) => view.move_selection(1),
+                        ViewMode::Splash => {}
+                    },
                     KeyCode::Backspace => {
                         if matches!(app.mode, ViewMode::Browser) {
                             app.search.pop();
                             app.recompute_filter();
                         }
                     }
-                    KeyCode::Char(c) => {
+                    KeyCode::Char(c) if matches!(app.mode, ViewMode::Browser) && is_search_input_key(&key) => {
                         if matches!(app.mode, ViewMode::Browser) {
                             app.search.push(c);
                             app.recompute_filter();
@@ -1024,6 +1097,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
         Some(view) => render_dataset_view(
             frame,
             view,
+            app.is_bookmarked(view.dataset.dataset.as_str()),
             app.status_message.as_deref(),
             app.active_sync.as_ref(),
             app.spinner_tick,
@@ -1077,6 +1151,14 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
                         Style::default().fg(access_color(dataset.access.as_ref())),
                     ),
                     Span::styled(
+                        if app.is_bookmarked(dataset.dataset.as_str()) {
+                            "* "
+                        } else {
+                            "  "
+                        },
+                        Style::default().fg(Color::Yellow),
+                    ),
+                    Span::styled(
                         dataset.dataset.clone(),
                         Style::default().add_modifier(Modifier::BOLD),
                     ),
@@ -1097,7 +1179,7 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     frame.render_widget(Clear, content[1]);
     frame.render_widget(details, content[1]);
 
-    render_footer(frame, areas[2], " Type to search  │  ↑/↓ navigate  │  Enter inspect dataset  │  Ctrl+C quit ");
+    render_footer(frame, areas[2], " Type to search  │  ↑/↓ navigate  │  Tab bookmark  │  Enter inspect dataset  │  Ctrl+C quit ");
 }
 
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, text: &str) {
@@ -1116,6 +1198,14 @@ fn render_browser_details(app: &RemoteListTui) -> Paragraph<'static> {
             Line::from(format!("exchange: {}", dataset.exchange)),
             Line::from(format!("asset: {}", dataset.asset)),
             Line::from(format!("access: {}", dataset.access_details())),
+            Line::from(format!(
+                "bookmarked: {}",
+                if app.is_bookmarked(dataset.dataset.as_str()) {
+                    "yes"
+                } else {
+                    "no"
+                }
+            )),
             Line::from(""),
             Line::from("Type to search"),
             Line::from("Use access:open | access:preview | access:restricted"),
@@ -1140,6 +1230,7 @@ fn render_browser_details(app: &RemoteListTui) -> Paragraph<'static> {
 fn render_dataset_view(
     frame: &mut ratatui::Frame<'_>,
     view: &DatasetView,
+    is_bookmarked: bool,
     status_message: Option<&str>,
     active_sync: Option<&ActiveDaySync>,
     spinner_tick: usize,
@@ -1147,7 +1238,7 @@ fn render_dataset_view(
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(5),
             Constraint::Min(8),
             Constraint::Length(12),
             Constraint::Length(1),
@@ -1161,6 +1252,14 @@ fn render_dataset_view(
         )]),
         Line::from(format!("data starting from {}", view.dataset.start)),
         Line::from(format!("access: {}", view.dataset.access_details())),
+        Line::from(format!(
+            "bookmarked: {}",
+            if is_bookmarked {
+                "yes"
+            } else {
+                "no"
+            }
+        )),
     ];
     if let Some(status) = status_message {
         summary_lines.push(Line::from(format!("status: {status}")));
@@ -1174,7 +1273,7 @@ fn render_dataset_view(
     frame.render_widget(render_day_grid(view, active_sync, spinner_tick), areas[1]);
     frame.render_widget(render_selected_day_summary(view, active_sync), areas[2]);
 
-    render_footer(frame, areas[3], " Enter sync day  │  ←/→ move day  │  ↑/↓ move week  │  Esc back  │  Ctrl+C quit ");
+    render_footer(frame, areas[3], " Enter sync day  │  Tab next day  │  ←/→ move day  │  ↑/↓ move week  │  Esc back  │  Ctrl+C quit ");
 }
 
 fn render_day_grid(
@@ -1674,6 +1773,52 @@ fn centered_rect(width_percentage: u16, height: u16, area: Rect) -> Rect {
     horizontal[1]
 }
 
+fn is_search_input_key(key: &crossterm::event::KeyEvent) -> bool {
+    let KeyCode::Char(c) = key.code else {
+        return false;
+    };
+
+    let allowed_modifiers = KeyModifiers::NONE | KeyModifiers::SHIFT;
+    if !(key.modifiers - allowed_modifiers).is_empty() {
+        return false;
+    }
+
+    c == ' ' || c.is_ascii_graphic()
+}
+
+fn bookmarks_path(root: &Path) -> PathBuf {
+    root.join("bookmarks.json")
+}
+
+fn load_bookmarks(root: &Path) -> Result<BTreeSet<String>> {
+    let path = bookmarks_path(root);
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+        Err(err) => {
+            return Err(TickError::Other(
+                err.into(),
+            ))
+        }
+    };
+
+    let store: BookmarkStore = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse {}", path.display()))
+        .map_err(TickError::Other)?;
+    Ok(store.bookmarks)
+}
+
+fn save_bookmarks(root: &Path, bookmarks: &BTreeSet<String>) -> Result<()> {
+    fs::create_dir_all(root).map_err(|err| TickError::Other(err.into()))?;
+    let path = bookmarks_path(root);
+    let contents = serde_json::to_string_pretty(&BookmarkStore {
+        bookmarks: bookmarks.clone(),
+    })
+    .with_context(|| format!("failed to serialize {}", path.display()))
+    .map_err(TickError::Other)?;
+    fs::write(&path, contents).map_err(|err| TickError::Other(err.into()))
+}
+
 fn access_color(access: Option<&DatasetAccess>) -> Color {
     match access.map(|item| &item.status) {
         Some(DatasetAccessStatus::Open) => Color::Green,
@@ -1730,7 +1875,7 @@ mod tests {
     use super::{
         ActiveDaySync, DatasetView, DaySyncUpdate, RemoteDatasetEntry, RemoteListTui,
         RemoteTuiSeed, SyncPhase, build_day_coverages, diff_missing_snapshot_keys,
-        ApiKeyRequirement, api_key_requirement_for_download,
+        ApiKeyRequirement, api_key_requirement_for_download, load_bookmarks, save_bookmarks,
     };
     use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
     use crate::layout::LocalSnapshotEntry;
@@ -1830,6 +1975,105 @@ mod tests {
             app.selected_dataset()
                 .map(|dataset| dataset.dataset.as_str()),
             Some("binance:ETHUSDT")
+        );
+    }
+
+    #[test]
+    fn bookmarked_datasets_sort_to_top() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let bookmarked = "binance:ETHUSDT".to_string();
+        save_bookmarks(tempdir.path(), &BTreeSet::from([bookmarked.clone()]))
+            .expect("save bookmarks");
+
+        let app = RemoteListTui::new(
+            vec![
+                RemoteDatasetEntry {
+                    exchange: "aster".into(),
+                    asset: "BTCUSDT".into(),
+                    start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                    end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                    source: Some("manifest".into()),
+                    access: Some(DatasetAccess {
+                        status: DatasetAccessStatus::Open,
+                        public_cutoff_date: None,
+                    }),
+                    dataset: "aster:BTCUSDT".into(),
+                },
+                RemoteDatasetEntry {
+                    exchange: "binance".into(),
+                    asset: "ETHUSDT".into(),
+                    start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                    end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                    source: Some("manifest".into()),
+                    access: Some(DatasetAccess {
+                        status: DatasetAccessStatus::Open,
+                        public_cutoff_date: None,
+                    }),
+                    dataset: bookmarked.clone(),
+                },
+            ],
+            Vec::<LocalSnapshotEntry>::new(),
+            Vec::new(),
+            tempdir.path().to_path_buf(),
+            4,
+            RemoteTuiSeed::default(),
+        );
+
+        assert_eq!(app.filtered_indices, vec![1, 0]);
+        assert_eq!(
+            app.selected_dataset()
+                .map(|dataset| dataset.dataset.as_str()),
+            Some(bookmarked.as_str())
+        );
+    }
+
+    #[test]
+    fn toggling_bookmark_persists_without_reordering_current_session() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let bookmarked = "binance:ETHUSDT".to_string();
+        let mut app = RemoteListTui::new(
+            vec![
+                RemoteDatasetEntry {
+                    exchange: "aster".into(),
+                    asset: "BTCUSDT".into(),
+                    start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                    end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                    source: Some("manifest".into()),
+                    access: Some(DatasetAccess {
+                        status: DatasetAccessStatus::Open,
+                        public_cutoff_date: None,
+                    }),
+                    dataset: "aster:BTCUSDT".into(),
+                },
+                RemoteDatasetEntry {
+                    exchange: "binance".into(),
+                    asset: "ETHUSDT".into(),
+                    start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                    end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                    source: Some("manifest".into()),
+                    access: Some(DatasetAccess {
+                        status: DatasetAccessStatus::Open,
+                        public_cutoff_date: None,
+                    }),
+                    dataset: bookmarked.clone(),
+                },
+            ],
+            Vec::<LocalSnapshotEntry>::new(),
+            Vec::new(),
+            tempdir.path().to_path_buf(),
+            4,
+            RemoteTuiSeed::default(),
+        );
+
+        app.selected = 1;
+        app.toggle_current_bookmark().expect("toggle bookmark");
+
+        assert_eq!(app.filtered_indices, vec![0, 1]);
+        assert_eq!(app.selected, 1);
+        assert!(app.is_bookmarked(bookmarked.as_str()));
+        assert_eq!(
+            load_bookmarks(tempdir.path()).expect("load bookmarks"),
+            BTreeSet::from([bookmarked])
         );
     }
 
