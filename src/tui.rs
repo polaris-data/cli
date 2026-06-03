@@ -1151,9 +1151,9 @@ fn render_splash(frame: &mut ratatui::Frame<'_>, spinner_tick: usize) {
         ])
         .split(area);
 
-    let sky_area = centered_rect(82, sections[0].height, sections[0]);
-    let copy_area = centered_rect(72, sections[1].height, sections[1]);
-    let footer_area = centered_rect(50, sections[2].height, sections[2]);
+    let sky_area = centered_rect(92, sections[0].height, sections[0]);
+    let copy_area = centered_rect(84, sections[1].height, sections[1]);
+    let footer_area = centered_rect(64, sections[2].height, sections[2]);
 
     frame.render_widget(Clear, area);
     frame.render_widget(
@@ -1183,8 +1183,8 @@ fn render_splash(frame: &mut ratatui::Frame<'_>, spinner_tick: usize) {
     );
     frame.render_widget(
         Paragraph::new(vec![Line::from(vec![Span::styled(
-            "Space to open catalog",
-            Style::default().fg(Color::Blue),
+            " Space to open catalog ",
+            Style::default().fg(Color::Black).bg(Color::White),
         )])])
         .alignment(Alignment::Center),
         footer_area,
@@ -1220,17 +1220,22 @@ fn splash_sky_line(
     pole_y: f32,
     spinner_tick: usize,
 ) -> Line<'static> {
+    if row + 1 >= height {
+        return Line::from(" ".repeat(width));
+    }
+
     let mut spans = Vec::with_capacity(width);
-    let horizon_start = height.saturating_mul(4) / 5;
 
     for col in 0..width {
-        let sky = splash_sky_cell(width, height, col, row, pole_x, pole_y, spinner_tick);
-        let silhouette = splash_silhouette_cell(width, horizon_start, col, row);
-        spans.push(if let Some(silhouette) = silhouette {
-            silhouette
-        } else {
-            sky
-        });
+        spans.push(splash_sky_cell(
+            width,
+            height,
+            col,
+            row,
+            pole_x,
+            pole_y,
+            spinner_tick,
+        ));
     }
 
     Line::from(spans)
@@ -1259,7 +1264,7 @@ fn splash_sky_cell(
 
     if radius < 1.4 {
         return Span::styled(
-            "o",
+            "*",
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
@@ -1293,31 +1298,6 @@ fn splash_sky_cell(
 
     Span::styled(symbol, Style::default().fg(color))
 }
-
-fn splash_silhouette_cell(
-    width: usize,
-    horizon_start: usize,
-    col: usize,
-    row: usize,
-) -> Option<Span<'static>> {
-    if row < horizon_start {
-        return None;
-    }
-
-    let floor =
-        horizon_start + ((col * 3 + 7) % 5) / 2 + if col > width / 2 { (col + row) % 2 } else { 0 };
-    let left_tree = col < width / 6 && row >= horizon_start.saturating_sub(col / 4);
-    let right_tree =
-        col > (width * 5) / 6 && row >= horizon_start.saturating_sub((width - col) / 5);
-    let center_branch = col.abs_diff(width / 2) < 2 && row >= horizon_start.saturating_sub(3);
-
-    if row >= floor || left_tree || right_tree || center_branch {
-        Some(Span::styled("#", Style::default().fg(Color::DarkGray)))
-    } else {
-        None
-    }
-}
-
 fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     match app.dataset_view() {
         Some(view) => render_dataset_view(
