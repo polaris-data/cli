@@ -18,7 +18,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, error::TryRecvError, unbounded_channel};
 
-use crate::api::{PolarisClient, SnapshotEntry};
+use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::config::Config;
 use crate::error::{Result, TickError};
@@ -34,7 +34,61 @@ pub struct RemoteDatasetEntry {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub source: Option<String>,
+    pub access: Option<DatasetAccess>,
     pub dataset: String,
+}
+
+impl RemoteDatasetEntry {
+    fn access_badge(&self) -> String {
+        let label = self
+            .access
+            .as_ref()
+            .map(|access| access.status_label())
+            .unwrap_or("unknown");
+        format!("[{label}]")
+    }
+
+    pub fn access_summary(&self) -> String {
+        self.access
+            .as_ref()
+            .map(DatasetAccess::summary_label)
+            .unwrap_or_else(|| "unknown".into())
+    }
+
+    pub fn access_sort_order(&self) -> u8 {
+        self.access
+            .as_ref()
+            .map(DatasetAccess::sort_order)
+            .unwrap_or(u8::MAX)
+    }
+
+    pub fn matches_search(&self, search: &str) -> bool {
+        let normalized = search.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return true;
+        }
+
+        let haystack = format!(
+            "{} {} {}",
+            self.dataset,
+            self.source.as_deref().unwrap_or_default(),
+            self.access
+                .as_ref()
+                .map(DatasetAccess::search_text)
+                .unwrap_or_else(|| "unknown".into())
+        )
+        .to_ascii_lowercase();
+
+        normalized.split_whitespace().all(|token| {
+            if let Some(status) = token.strip_prefix("access:") {
+                return self
+                    .access
+                    .as_ref()
+                    .is_some_and(|access| access.status_label() == status);
+            }
+            haystack.contains(token)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -79,6 +133,39 @@ struct DatasetView {
 struct ApiKeyPromptState {
     input: String,
     error_message: Option<String>,
+    access_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ApiKeyRequirement {
+    Restricted,
+    Preview { public_cutoff_date: Option<NaiveDate> },
+    LegacyPreviewWindow,
+}
+
+impl ApiKeyRequirement {
+    fn message(&self) -> String {
+        match self {
+            Self::Restricted => {
+                "This dataset is restricted. A Polaris API key is required for all snapshot downloads."
+                    .into()
+            }
+            Self::Preview {
+                public_cutoff_date: Some(date),
+            } => format!(
+                "This dataset is preview-only before {date}. Older snapshot downloads require a Polaris API key."
+            ),
+            Self::Preview {
+                public_cutoff_date: None,
+            } => {
+                "This dataset is preview-only. Older snapshot downloads require a Polaris API key."
+                    .into()
+            }
+            Self::LegacyPreviewWindow => {
+                "Older than 7 days requires a Polaris API key.".into()
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -192,13 +279,12 @@ impl RemoteListTui {
     }
 
     fn recompute_filter(&mut self) {
-        let needle = self.search.to_ascii_lowercase();
         self.filtered_indices = self
             .datasets
             .iter()
             .enumerate()
             .filter_map(|(index, dataset)| {
-                if needle.is_empty() || dataset.dataset.to_ascii_lowercase().contains(&needle) {
+                if dataset.matches_search(&self.search) {
                     Some(index)
                 } else {
                     None
@@ -415,17 +501,31 @@ impl RemoteListTui {
         Ok(())
     }
 
-    fn should_prompt_for_api_key(&self, today: NaiveDate, has_api_key: bool) -> bool {
+    fn api_key_requirement_for_selected_day(
+        &self,
+        today: NaiveDate,
+        has_api_key: bool,
+    ) -> Option<ApiKeyRequirement> {
         let Some(view) = self.dataset_view() else {
-            return false;
+            return None;
         };
         let day = view.selected_coverage();
-        requires_api_key_for_download(day.date, today, has_api_key, day.missing_keys.len())
+        api_key_requirement_for_download(
+            view.dataset.access.as_ref(),
+            day.date,
+            today,
+            has_api_key,
+            day.missing_keys.len(),
+        )
     }
 
-    fn open_api_key_prompt(&mut self) {
+    fn open_api_key_prompt(&mut self, requirement: ApiKeyRequirement) {
         if self.api_key_prompt.is_none() {
-            self.api_key_prompt = Some(ApiKeyPromptState::default());
+            self.api_key_prompt = Some(ApiKeyPromptState {
+                input: String::new(),
+                error_message: None,
+                access_message: requirement.message(),
+            });
         }
     }
 
@@ -811,11 +911,11 @@ async fn run_event_loop(
                             if let Err(err) = app.open_selected_dataset(&client).await {
                                 app.status_message = Some(format!("error: {err}"));
                             }
-                        } else if app.should_prompt_for_api_key(
+                        } else if let Some(requirement) = app.api_key_requirement_for_selected_day(
                             Utc::now().date_naive(),
                             client.has_api_key(),
                         ) {
-                            app.open_api_key_prompt();
+                            app.open_api_key_prompt(requirement);
                         } else if let Err(err) = app.sync_selected_day(&client).await {
                             app.status_message = Some(format!("error: {err}"));
                         }
@@ -893,7 +993,7 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
 
     let search = Paragraph::new(app.search.clone()).block(
         Block::default()
-            .title("Search exchange:asset")
+            .title("Search dataset or access")
             .borders(Borders::ALL),
     );
     frame.render_widget(search, areas[0]);
@@ -905,10 +1005,16 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
             .iter()
             .map(|index| {
                 let dataset = &app.datasets[*index];
-                ListItem::new(Line::from(vec![Span::styled(
-                    dataset.dataset.clone(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )]))
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{:<12} ", dataset.access_badge()),
+                        Style::default().fg(access_color(dataset.access.as_ref())),
+                    ),
+                    Span::styled(
+                        dataset.dataset.clone(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                ]))
             })
             .collect()
     };
@@ -952,6 +1058,7 @@ fn render_browser_details(app: &RemoteListTui) -> Paragraph<'static> {
                 "source: {}",
                 dataset.source.clone().unwrap_or_else(|| "-".into())
             )),
+            Line::from(format!("access: {}", dataset.access_summary())),
             Line::from(""),
             Line::from(format!("local snapshots: {}", local_count)),
             Line::from(format!("local first: {}", local_first)),
@@ -959,6 +1066,7 @@ fn render_browser_details(app: &RemoteListTui) -> Paragraph<'static> {
             Line::from(""),
             Line::from("Keys"),
             Line::from("Type to search"),
+            Line::from("Use access:open | access:preview | access:restricted"),
             Line::from("Up/Down move selection"),
             Line::from("Enter inspect snapshots"),
             Line::from("q or Esc quit"),
@@ -1002,6 +1110,7 @@ fn render_dataset_view(
             Style::default().add_modifier(Modifier::BOLD),
         )]),
         Line::from(format!("data starting from {}", view.dataset.start)),
+        Line::from(format!("access: {}", view.dataset.access_summary())),
         Line::from("Enter sync day, Left/Right move day, Up/Down move week"),
         Line::from("Esc back, q quit"),
     ];
@@ -1193,7 +1302,7 @@ fn render_api_key_prompt(frame: &mut ratatui::Frame<'_>, prompt: &ApiKeyPromptSt
 
     let mut lines = vec![
         Line::from(vec![Span::styled(
-            "Older than 7 days requires a Polaris API key.",
+            prompt.access_message.clone(),
             Style::default().add_modifier(Modifier::BOLD),
         )]),
         Line::from("Go to polaris.supply to grab your API key."),
@@ -1515,13 +1624,47 @@ fn centered_rect(width_percentage: u16, height: u16, area: Rect) -> Rect {
     horizontal[1]
 }
 
-fn requires_api_key_for_download(
+fn access_color(access: Option<&DatasetAccess>) -> Color {
+    match access.map(|item| &item.status) {
+        Some(DatasetAccessStatus::Open) => Color::Green,
+        Some(DatasetAccessStatus::Preview) => Color::Yellow,
+        Some(DatasetAccessStatus::Restricted) => Color::Red,
+        None => Color::DarkGray,
+    }
+}
+
+fn api_key_requirement_for_download(
+    access: Option<&DatasetAccess>,
     selected_date: NaiveDate,
     today: NaiveDate,
     has_api_key: bool,
     missing_snapshot_count: usize,
-) -> bool {
-    !has_api_key && missing_snapshot_count > 0 && selected_date < today - ChronoDuration::days(7)
+) -> Option<ApiKeyRequirement> {
+    if has_api_key || missing_snapshot_count == 0 {
+        return None;
+    }
+
+    match access {
+        Some(access) if !access.requires_api_key_for_date(selected_date) => None,
+        Some(DatasetAccess {
+            status: DatasetAccessStatus::Restricted,
+            ..
+        }) => Some(ApiKeyRequirement::Restricted),
+        Some(DatasetAccess {
+            status: DatasetAccessStatus::Preview,
+            public_cutoff_date,
+        }) => Some(ApiKeyRequirement::Preview {
+            public_cutoff_date: *public_cutoff_date,
+        }),
+        Some(DatasetAccess {
+            status: DatasetAccessStatus::Open,
+            ..
+        }) => None,
+        None if selected_date < today - ChronoDuration::days(7) => {
+            Some(ApiKeyRequirement::LegacyPreviewWindow)
+        }
+        None => None,
+    }
 }
 
 #[cfg(test)]
@@ -1537,9 +1680,9 @@ mod tests {
     use super::{
         ActiveDaySync, DatasetView, DaySyncUpdate, RemoteDatasetEntry, RemoteListTui,
         RemoteTuiSeed, SyncPhase, build_day_coverages, diff_missing_snapshot_keys,
-        requires_api_key_for_download,
+        ApiKeyRequirement, api_key_requirement_for_download,
     };
-    use crate::api::{PolarisClient, SnapshotEntry};
+    use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
     use crate::layout::LocalSnapshotEntry;
 
     #[test]
@@ -1551,6 +1694,10 @@ mod tests {
                 start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
                 source: Some("manifest".into()),
+                access: Some(DatasetAccess {
+                    status: DatasetAccessStatus::Open,
+                    public_cutoff_date: None,
+                }),
                 dataset: "aster:BTCUSDT".into(),
             },
             RemoteDatasetEntry {
@@ -1559,6 +1706,10 @@ mod tests {
                 start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
                 source: Some("manifest".into()),
+                access: Some(DatasetAccess {
+                    status: DatasetAccessStatus::Restricted,
+                    public_cutoff_date: None,
+                }),
                 dataset: "binance:ETHUSDT".into(),
             },
         ];
@@ -1580,6 +1731,55 @@ mod tests {
             app.selected_dataset()
                 .map(|dataset| dataset.dataset.as_str()),
             Some("aster:BTCUSDT")
+        );
+    }
+
+    #[test]
+    fn access_search_filters_remote_datasets() {
+        let datasets = vec![
+            RemoteDatasetEntry {
+                exchange: "aster".into(),
+                asset: "BTCUSDT".into(),
+                start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                source: Some("manifest".into()),
+                access: Some(DatasetAccess {
+                    status: DatasetAccessStatus::Preview,
+                    public_cutoff_date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
+                }),
+                dataset: "aster:BTCUSDT".into(),
+            },
+            RemoteDatasetEntry {
+                exchange: "binance".into(),
+                asset: "ETHUSDT".into(),
+                start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                source: Some("manifest".into()),
+                access: Some(DatasetAccess {
+                    status: DatasetAccessStatus::Restricted,
+                    public_cutoff_date: None,
+                }),
+                dataset: "binance:ETHUSDT".into(),
+            },
+        ];
+
+        let app = RemoteListTui::new(
+            datasets,
+            Vec::<LocalSnapshotEntry>::new(),
+            Vec::new(),
+            PathBuf::from("/tmp/tick"),
+            4,
+            RemoteTuiSeed {
+                search: Some("access:restricted".into()),
+                ..RemoteTuiSeed::default()
+            },
+        );
+
+        assert_eq!(app.filtered_indices.len(), 1);
+        assert_eq!(
+            app.selected_dataset()
+                .map(|dataset| dataset.dataset.as_str()),
+            Some("binance:ETHUSDT")
         );
     }
 
@@ -1646,6 +1846,10 @@ mod tests {
             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
             end: Utc.with_ymd_and_hms(2026, 6, 1, 23, 59, 59).unwrap(),
             source: Some("manifest".into()),
+            access: Some(DatasetAccess {
+                status: DatasetAccessStatus::Preview,
+                public_cutoff_date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
+            }),
             dataset: "aster:ASTERUSDT".into(),
         };
         let tempdir = tempfile::TempDir::new().expect("tempdir");
@@ -1746,44 +1950,109 @@ mod tests {
     }
 
     #[test]
-    fn older_downloads_without_api_key_require_prompt() {
+    fn restricted_datasets_without_api_key_require_prompt() {
         let today = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
         let selected_date = NaiveDate::from_ymd_opt(2026, 6, 2).unwrap();
-        assert!(requires_api_key_for_download(
-            selected_date,
-            today,
-            false,
-            1
-        ));
+        assert_eq!(
+            api_key_requirement_for_download(
+                Some(&DatasetAccess {
+                    status: DatasetAccessStatus::Restricted,
+                    public_cutoff_date: None,
+                }),
+                selected_date,
+                today,
+                false,
+                1
+            ),
+            Some(ApiKeyRequirement::Restricted)
+        );
     }
 
     #[test]
-    fn seven_day_old_download_does_not_require_prompt() {
+    fn preview_datasets_require_prompt_before_cutoff() {
         let today = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
-        let selected_date = NaiveDate::from_ymd_opt(2026, 6, 3).unwrap();
-        assert!(!requires_api_key_for_download(
-            selected_date,
-            today,
-            false,
-            1
-        ));
+        let selected_date = NaiveDate::from_ymd_opt(2026, 5, 27).unwrap();
+        assert_eq!(
+            api_key_requirement_for_download(
+                Some(&DatasetAccess {
+                    status: DatasetAccessStatus::Preview,
+                    public_cutoff_date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
+                }),
+                selected_date,
+                today,
+                false,
+                1
+            ),
+            Some(ApiKeyRequirement::Preview {
+                public_cutoff_date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
+            })
+        );
+    }
+
+    #[test]
+    fn preview_datasets_do_not_require_prompt_on_or_after_cutoff() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let selected_date = NaiveDate::from_ymd_opt(2026, 5, 28).unwrap();
+        assert_eq!(
+            api_key_requirement_for_download(
+                Some(&DatasetAccess {
+                    status: DatasetAccessStatus::Preview,
+                    public_cutoff_date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
+                }),
+                selected_date,
+                today,
+                false,
+                1
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn legacy_older_downloads_without_access_metadata_require_prompt() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let selected_date = NaiveDate::from_ymd_opt(2026, 6, 2).unwrap();
+        assert_eq!(
+            api_key_requirement_for_download(
+                None,
+                selected_date,
+                today,
+                false,
+                1
+            ),
+            Some(ApiKeyRequirement::LegacyPreviewWindow)
+        );
     }
 
     #[test]
     fn prompt_is_skipped_when_api_key_exists_or_no_download_is_needed() {
         let today = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
         let selected_date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
-        assert!(!requires_api_key_for_download(
-            selected_date,
-            today,
-            true,
-            1
-        ));
-        assert!(!requires_api_key_for_download(
-            selected_date,
-            today,
-            false,
-            0
-        ));
+        assert_eq!(
+            api_key_requirement_for_download(
+                Some(&DatasetAccess {
+                    status: DatasetAccessStatus::Restricted,
+                    public_cutoff_date: None,
+                }),
+                selected_date,
+                today,
+                true,
+                1
+            ),
+            None
+        );
+        assert_eq!(
+            api_key_requirement_for_download(
+                Some(&DatasetAccess {
+                    status: DatasetAccessStatus::Restricted,
+                    public_cutoff_date: None,
+                }),
+                selected_date,
+                today,
+                false,
+                0
+            ),
+            None
+        );
     }
 }

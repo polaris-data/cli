@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-use polaris::api::{CatalogAsset, CatalogExchange, CatalogResponse, PolarisClient, SnapshotEntry};
+use polaris::api::{
+    CatalogAsset, CatalogExchange, CatalogResponse, DatasetAccess, DatasetAccessStatus,
+    PolarisClient, SnapshotEntry,
+};
 use polaris::config::Config;
 use polaris::error::TickError;
 use polaris::layout::Layout;
@@ -395,6 +398,12 @@ async fn handle_catalog(
             start: state.coverage.from,
             end: state.coverage.to,
             source: Some("manifest".into()),
+            access: Some(DatasetAccess {
+                status: DatasetAccessStatus::Preview,
+                public_cutoff_date: Some(
+                    chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+                ),
+            }),
         }]
     } else {
         Vec::new()
