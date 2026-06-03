@@ -11,7 +11,7 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
@@ -19,6 +19,7 @@ use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, error::TryRecvError, unbounded_channel};
 
 use crate::api::{PolarisClient, SnapshotEntry};
+use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::config::Config;
 use crate::error::{Result, TickError};
 use crate::layout::{LocalDailyArtifactEntry, LocalSnapshotEntry, infer_snapshot_date_from_key};
@@ -72,6 +73,12 @@ struct DatasetView {
     dataset: RemoteDatasetEntry,
     days: Vec<DayCoverage>,
     selected_day: usize,
+}
+
+#[derive(Debug, Default)]
+struct ApiKeyPromptState {
+    input: String,
+    error_message: Option<String>,
 }
 
 #[derive(Debug)]
@@ -138,6 +145,7 @@ struct RemoteListTui {
     active_sync: Option<ActiveDaySync>,
     spinner_tick: usize,
     mode: ViewMode,
+    api_key_prompt: Option<ApiKeyPromptState>,
 }
 
 impl RemoteListTui {
@@ -177,6 +185,7 @@ impl RemoteListTui {
             active_sync: None,
             spinner_tick: 0,
             mode: ViewMode::Browser,
+            api_key_prompt: None,
         };
         app.recompute_filter();
         app
@@ -404,6 +413,84 @@ impl RemoteListTui {
         });
         self.status_message = Some(format!("syncing {}", selected_date));
         Ok(())
+    }
+
+    fn should_prompt_for_api_key(&self, today: NaiveDate, has_api_key: bool) -> bool {
+        let Some(view) = self.dataset_view() else {
+            return false;
+        };
+        let day = view.selected_coverage();
+        requires_api_key_for_download(day.date, today, has_api_key, day.missing_keys.len())
+    }
+
+    fn open_api_key_prompt(&mut self) {
+        if self.api_key_prompt.is_none() {
+            self.api_key_prompt = Some(ApiKeyPromptState::default());
+        }
+    }
+
+    fn close_api_key_prompt(&mut self) {
+        self.api_key_prompt = None;
+    }
+
+    fn push_api_key_prompt_char(&mut self, c: char) {
+        if let Some(prompt) = &mut self.api_key_prompt {
+            prompt.input.push(c);
+            prompt.error_message = None;
+        }
+    }
+
+    fn pop_api_key_prompt_char(&mut self) {
+        if let Some(prompt) = &mut self.api_key_prompt {
+            prompt.input.pop();
+            prompt.error_message = None;
+        }
+    }
+
+    async fn submit_api_key_prompt(&mut self, client: &mut PolarisClient) -> Result<()> {
+        let Some(prompt) = &mut self.api_key_prompt else {
+            return Ok(());
+        };
+
+        let api_key = prompt.input.trim().to_string();
+        if api_key.is_empty() {
+            prompt.error_message = Some("API key cannot be empty".into());
+            return Ok(());
+        }
+
+        let store = match KeychainCredentialStore::new() {
+            Ok(store) => store,
+            Err(err) => {
+                prompt.error_message = Some(err.to_string());
+                return Ok(());
+            }
+        };
+        if let Err(err) = store.set_api_key(&api_key) {
+            prompt.error_message = Some(err.to_string());
+            return Ok(());
+        }
+
+        let config = match Config::from_env() {
+            Ok(config) => config,
+            Err(err) => {
+                prompt.error_message = Some(err.to_string());
+                return Ok(());
+            }
+        };
+        *client = match PolarisClient::new(
+            config.base_url.clone(),
+            config.api_key.clone(),
+            config.timeout,
+        ) {
+            Ok(client) => client,
+            Err(err) => {
+                prompt.error_message = Some(err.to_string());
+                return Ok(());
+            }
+        };
+
+        self.close_api_key_prompt();
+        self.sync_selected_day(client).await
     }
 
     async fn pump_sync_updates(&mut self, client: &PolarisClient) -> Result<()> {
@@ -686,6 +773,7 @@ async fn run_event_loop(
     client: PolarisClient,
     mut app: RemoteListTui,
 ) -> Result<()> {
+    let mut client = client;
     loop {
         app.pump_sync_updates(&client).await?;
         terminal
@@ -696,6 +784,20 @@ async fn run_event_loop(
             let event = event::read().map_err(|err| TickError::Other(err.into()))?;
             if let Event::Key(key) = event {
                 if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                if app.api_key_prompt.is_some() {
+                    match key.code {
+                        KeyCode::Esc => app.close_api_key_prompt(),
+                        KeyCode::Enter => {
+                            if let Err(err) = app.submit_api_key_prompt(&mut client).await {
+                                app.status_message = Some(format!("error: {err}"));
+                            }
+                        }
+                        KeyCode::Backspace => app.pop_api_key_prompt_char(),
+                        KeyCode::Char(c) if !c.is_control() => app.push_api_key_prompt_char(c),
+                        _ => {}
+                    }
                     continue;
                 }
                 match key.code {
@@ -709,6 +811,11 @@ async fn run_event_loop(
                             if let Err(err) = app.open_selected_dataset(&client).await {
                                 app.status_message = Some(format!("error: {err}"));
                             }
+                        } else if app.should_prompt_for_api_key(
+                            Utc::now().date_naive(),
+                            client.has_api_key(),
+                        ) {
+                            app.open_api_key_prompt();
                         } else if let Err(err) = app.sync_selected_day(&client).await {
                             app.status_message = Some(format!("error: {err}"));
                         }
@@ -766,6 +873,10 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
             app.spinner_tick,
         ),
         None => render_browser(frame, app),
+    }
+
+    if let Some(prompt) = &app.api_key_prompt {
+        render_api_key_prompt(frame, prompt);
     }
 }
 
@@ -1072,6 +1183,46 @@ fn render_selected_day_summary(
     .block(Block::default().title("Day Details").borders(Borders::ALL))
 }
 
+fn render_api_key_prompt(frame: &mut ratatui::Frame<'_>, prompt: &ApiKeyPromptState) {
+    let area = centered_rect(72, 10, frame.area());
+    let masked_input = if prompt.input.is_empty() {
+        "<empty>".to_string()
+    } else {
+        "*".repeat(prompt.input.chars().count())
+    };
+
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            "Older than 7 days requires a Polaris API key.",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("Go to polaris.supply to grab your API key."),
+        Line::from(""),
+        Line::from(format!("API key: {masked_input}")),
+        Line::from("Enter saves the key and continues syncing. Esc cancels."),
+    ];
+    if let Some(error) = &prompt.error_message {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::default()
+                    .title("Polaris API Key")
+                    .borders(Borders::ALL),
+            ),
+        area,
+    );
+}
+
 fn summarize_local_snapshots(
     snapshots: &[LocalSnapshotEntry],
 ) -> BTreeMap<String, LocalDatasetSummary> {
@@ -1344,6 +1495,37 @@ fn parse_snapshot_timestamp(raw: &str) -> Option<DateTime<Utc>> {
     Some(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
 }
 
+fn centered_rect(width_percentage: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(height.min(area.height)),
+            Constraint::Fill(1),
+        ])
+        .split(area);
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Percentage(width_percentage.min(100)),
+            Constraint::Fill(1),
+        ])
+        .split(vertical[1]);
+    horizontal[1]
+}
+
+fn requires_api_key_for_download(
+    selected_date: NaiveDate,
+    today: NaiveDate,
+    has_api_key: bool,
+    missing_snapshot_count: usize,
+) -> bool {
+    !has_api_key
+        && missing_snapshot_count > 0
+        && selected_date < today - ChronoDuration::days(7)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -1357,6 +1539,7 @@ mod tests {
     use super::{
         ActiveDaySync, DatasetView, DaySyncUpdate, RemoteDatasetEntry, RemoteListTui,
         RemoteTuiSeed, SyncPhase, build_day_coverages, diff_missing_snapshot_keys,
+        requires_api_key_for_download,
     };
     use crate::api::{PolarisClient, SnapshotEntry};
     use crate::layout::LocalSnapshotEntry;
@@ -1562,5 +1745,47 @@ mod tests {
             Some("synced 1 snapshot(s), failed 0, materialized 1 day(s)")
         );
         assert!(app.active_sync.is_none());
+    }
+
+    #[test]
+    fn older_downloads_without_api_key_require_prompt() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let selected_date = NaiveDate::from_ymd_opt(2026, 6, 2).unwrap();
+        assert!(requires_api_key_for_download(
+            selected_date,
+            today,
+            false,
+            1
+        ));
+    }
+
+    #[test]
+    fn seven_day_old_download_does_not_require_prompt() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let selected_date = NaiveDate::from_ymd_opt(2026, 6, 3).unwrap();
+        assert!(!requires_api_key_for_download(
+            selected_date,
+            today,
+            false,
+            1
+        ));
+    }
+
+    #[test]
+    fn prompt_is_skipped_when_api_key_exists_or_no_download_is_needed() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let selected_date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        assert!(!requires_api_key_for_download(
+            selected_date,
+            today,
+            true,
+            1
+        ));
+        assert!(!requires_api_key_for_download(
+            selected_date,
+            today,
+            false,
+            0
+        ));
     }
 }

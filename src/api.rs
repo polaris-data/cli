@@ -112,6 +112,10 @@ impl PolarisClient {
         &self.download_client
     }
 
+    pub fn has_api_key(&self) -> bool {
+        self.api_key.is_some()
+    }
+
     pub async fn fetch_catalog(
         &self,
         exchange: Option<&str>,
