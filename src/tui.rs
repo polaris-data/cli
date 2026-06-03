@@ -1521,9 +1521,7 @@ fn requires_api_key_for_download(
     has_api_key: bool,
     missing_snapshot_count: usize,
 ) -> bool {
-    !has_api_key
-        && missing_snapshot_count > 0
-        && selected_date < today - ChronoDuration::days(7)
+    !has_api_key && missing_snapshot_count > 0 && selected_date < today - ChronoDuration::days(7)
 }
 
 #[cfg(test)]

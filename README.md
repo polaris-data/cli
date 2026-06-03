@@ -25,6 +25,12 @@ curl -fsSL https://raw.githubusercontent.com/spectrum-ec/tick/main/install.sh | 
 
 Re-run the same command later to update to the newest release.
 
+Or, once installed, update in place from the CLI:
+
+```bash
+tick update
+```
+
 Install a pinned version:
 
 ```bash
@@ -145,6 +151,7 @@ tick list [--exchange <EXCHANGE>] [--asset <ASSET>] [--search <QUERY>] [--limit 
 tick list local [--exchange <EXCHANGE>] [--asset <ASSET>] [--date <YYYY-MM-DD>] [--json]
 tick reset [--json]
 tick sync --exchange <EXCHANGE> --asset <ASSET> --from <FROM> --to <TO> [--json] [--concurrency <N>]
+tick update [--version <TAG>] [--install-dir <DIR>]
 ```
 
 ### `tick`
@@ -184,6 +191,20 @@ Filtered example:
 ./target/debug/tick list \
   --exchange aster \
   --search btc
+```
+
+### `update`
+
+Downloads the latest `install.sh` from GitHub and re-runs the release installer.
+
+By default, `tick update` tries to preserve the current install directory when running from an installed `tick` binary. You can override that behavior explicitly.
+
+Examples:
+
+```bash
+tick update
+tick update --version v0.1.0
+tick update --install-dir "$HOME/.local/bin"
 ```
 
 ### `account set-key`

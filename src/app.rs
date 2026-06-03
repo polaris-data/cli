@@ -1,6 +1,9 @@
-use std::process::ExitCode;
+use std::env;
+use std::path::{Path, PathBuf};
+use std::process::{ExitCode, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use rpassword::prompt_password;
@@ -11,7 +14,7 @@ use crate::api::{CatalogExchange, PolarisClient};
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::cli::{
     AccountCommand, AccountSubcommand, Cli, Command, DatasetArgs, ListCommand, ListSubcommand,
-    LocalListArgs, RemoteListArgs, ResetArgs, SyncArgs,
+    LocalListArgs, RemoteListArgs, ResetArgs, SyncArgs, UpdateArgs,
 };
 use crate::config::{ApiKeySource, Config};
 use crate::error::{Result, TickError};
@@ -20,6 +23,9 @@ use crate::materialize::{MaterializeExecution, materialize_range_days};
 use crate::planner::{SyncPlan, TimeWindow, build_sync_plan};
 use crate::syncer::{SyncExecution, acquire_sync_lock, execute_sync, layout_for_root};
 use crate::tui::{RemoteDatasetEntry, RemoteTuiSeed, can_render_tui, run_remote_list_tui};
+
+const UPDATE_INSTALLER_URL: &str =
+    "https://raw.githubusercontent.com/spectrum-ec/tick/main/install.sh";
 
 pub async fn main_entry() -> ExitCode {
     init_tracing();
@@ -53,6 +59,7 @@ pub async fn run(cli: Cli) -> Result<u8> {
             )?;
             run_sync(&config, &client, args).await
         }
+        Some(Command::Update(args)) => run_update(args).await,
         None => {
             let config = Config::from_env()?;
             run_browser(&config).await
@@ -92,6 +99,175 @@ fn run_account_status() -> Result<u8> {
     println!("Polaris account status: {status}");
     println!("Base URL: {}", config.base_url);
     Ok(0)
+}
+
+async fn run_update(args: UpdateArgs) -> Result<u8> {
+    let temp_dir = create_update_temp_dir()?;
+    let installer_path = temp_dir.path().join("install.sh");
+    download_update_installer(&installer_path).await?;
+
+    let inferred_install_dir = match args.install_dir {
+        Some(path) => Some(path),
+        None => infer_current_install_dir()?,
+    };
+    let version = args.version;
+
+    let status = tokio::task::spawn_blocking(move || {
+        run_update_installer(
+            &installer_path,
+            version.as_deref(),
+            inferred_install_dir.as_deref(),
+        )
+    })
+    .await
+    .context("update task failed")
+    .map_err(TickError::Other)??;
+
+    if !status.success() {
+        return Err(TickError::Other(anyhow!(
+            "tick update failed with status {status}"
+        )));
+    }
+
+    Ok(0)
+}
+
+async fn download_update_installer(path: &Path) -> Result<()> {
+    let script = reqwest::get(UPDATE_INSTALLER_URL)
+        .await
+        .context("failed to download install.sh")
+        .map_err(TickError::Other)?
+        .error_for_status()
+        .context("failed to download install.sh")
+        .map_err(TickError::Other)?
+        .bytes()
+        .await
+        .context("failed to read install.sh")
+        .map_err(TickError::Other)?;
+
+    tokio::fs::write(path, &script)
+        .await
+        .with_context(|| format!("failed to write {}", path.display()))
+        .map_err(TickError::Other)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let permissions = std::fs::Permissions::from_mode(0o755);
+        tokio::fs::set_permissions(path, permissions)
+            .await
+            .with_context(|| format!("failed to mark {} executable", path.display()))
+            .map_err(TickError::Other)?;
+    }
+
+    Ok(())
+}
+
+fn run_update_installer(
+    installer_path: &Path,
+    version: Option<&str>,
+    install_dir: Option<&Path>,
+) -> Result<std::process::ExitStatus> {
+    let mut command = std::process::Command::new("bash");
+    command
+        .arg(installer_path)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    if let Some(version) = version {
+        command.arg("--version").arg(version);
+    }
+    if let Some(install_dir) = install_dir {
+        command.arg("--install-dir").arg(install_dir);
+    }
+
+    command
+        .status()
+        .context("failed to execute install.sh")
+        .map_err(TickError::Other)
+}
+
+fn infer_current_install_dir() -> Result<Option<PathBuf>> {
+    let current_exe = env::current_exe()
+        .context("failed to determine current executable path")
+        .map_err(TickError::Other)?;
+    Ok(infer_install_dir_from_executable(&current_exe))
+}
+
+fn infer_install_dir_from_executable(executable: &Path) -> Option<PathBuf> {
+    if executable.file_name()? != "tick" {
+        return None;
+    }
+
+    let install_dir = executable.parent()?;
+    if looks_like_cargo_target_dir(install_dir) {
+        return None;
+    }
+
+    Some(install_dir.to_path_buf())
+}
+
+fn looks_like_cargo_target_dir(path: &Path) -> bool {
+    let mut saw_target = false;
+    for component in path.components() {
+        let part = component.as_os_str();
+        if part == "target" {
+            saw_target = true;
+            continue;
+        }
+        if saw_target && (part == "debug" || part == "release") {
+            return true;
+        }
+    }
+    false
+}
+
+struct UpdateTempDir {
+    path: PathBuf,
+}
+
+impl UpdateTempDir {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for UpdateTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn create_update_temp_dir() -> Result<UpdateTempDir> {
+    let base = env::temp_dir();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before unix epoch")
+        .map_err(TickError::Other)?
+        .as_nanos();
+
+    for attempt in 0..32 {
+        let path = base.join(format!(
+            "tick-update-{}-{timestamp}-{attempt}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(UpdateTempDir { path }),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(TickError::Other(anyhow!(err).context(format!(
+                    "failed to create temporary update directory under {}",
+                    base.display()
+                ))));
+            }
+        }
+    }
+
+    Err(TickError::Other(anyhow!(
+        "failed to allocate temporary update directory"
+    )))
 }
 
 async fn run_browser(config: &Config) -> Result<u8> {
@@ -603,13 +779,15 @@ impl HumanOutput for ResetOutput {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
 
     use chrono::{TimeZone, Utc};
     use tempfile::TempDir;
 
     use super::{
         LocalListFilters, LocalListOutput, RemoteListFilters, RemoteListOutput, ResetOutput,
-        SyncOutput, TimeWindow, filter_local_list_entries, filter_remote_catalog, run_reset,
+        SyncOutput, TimeWindow, filter_local_list_entries, filter_remote_catalog,
+        infer_install_dir_from_executable, looks_like_cargo_target_dir, run_reset,
     };
     use crate::api::{CatalogAsset, CatalogExchange};
     use crate::cli::ResetArgs;
@@ -710,6 +888,40 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].exchange.as_deref(), Some("aster"));
         assert_eq!(filtered[0].asset.as_deref(), Some("BTCUSDT"));
+    }
+
+    #[test]
+    fn infer_install_dir_uses_parent_for_installed_binary() {
+        let install_dir =
+            infer_install_dir_from_executable(Path::new("/Users/test/.tick/bin/tick"));
+        assert_eq!(install_dir, Some(PathBuf::from("/Users/test/.tick/bin")));
+    }
+
+    #[test]
+    fn infer_install_dir_skips_non_release_binaries() {
+        assert_eq!(
+            infer_install_dir_from_executable(Path::new("/repo/target/debug/tick")),
+            None
+        );
+        assert_eq!(
+            infer_install_dir_from_executable(Path::new("/repo/target/release/tick")),
+            None
+        );
+        assert_eq!(
+            infer_install_dir_from_executable(Path::new("/usr/local/bin/not-tick")),
+            None
+        );
+    }
+
+    #[test]
+    fn cargo_target_detection_matches_debug_and_release_dirs() {
+        assert!(looks_like_cargo_target_dir(Path::new("/repo/target/debug")));
+        assert!(looks_like_cargo_target_dir(Path::new(
+            "/repo/target/release"
+        )));
+        assert!(!looks_like_cargo_target_dir(Path::new(
+            "/Users/test/.tick/bin"
+        )));
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -13,6 +15,7 @@ pub enum Command {
     List(ListCommand),
     Reset(ResetArgs),
     Sync(SyncArgs),
+    Update(UpdateArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -92,4 +95,43 @@ pub struct SyncArgs {
 pub struct ResetArgs {
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct UpdateArgs {
+    #[arg(long)]
+    pub version: Option<String>,
+    #[arg(long)]
+    pub install_dir: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Cli, Command};
+
+    #[test]
+    fn update_command_parses_with_optional_overrides() {
+        let cli = Cli::try_parse_from([
+            "tick",
+            "update",
+            "--version",
+            "v0.2.0",
+            "--install-dir",
+            "/tmp/tick",
+        ])
+        .expect("cli");
+
+        match cli.command {
+            Some(Command::Update(args)) => {
+                assert_eq!(args.version.as_deref(), Some("v0.2.0"));
+                assert_eq!(
+                    args.install_dir.as_deref(),
+                    Some(std::path::Path::new("/tmp/tick"))
+                );
+            }
+            other => panic!("expected update command, got {other:?}"),
+        }
+    }
 }

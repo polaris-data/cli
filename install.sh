@@ -213,7 +213,7 @@ detect_profile() {
 }
 
 ensure_path() {
-  local profile_info profile shell_kind line
+  local profile_info profile shell_kind line legacy_line
 
   case ":${PATH:-}:" in
     *":${INSTALL_DIR}:"*)
@@ -228,14 +228,19 @@ ensure_path() {
   mkdir -p "$(dirname "$profile")"
   touch "$profile"
 
-  if grep -Fqs "$INSTALL_DIR" "$profile"; then
-    return 0
-  fi
-
   if [[ "$shell_kind" == fish ]]; then
     line="fish_add_path -a \"$INSTALL_DIR\""
+    legacy_line=""
   else
-    line="export PATH=\"\$PATH:$INSTALL_DIR\""
+    line="export PATH=\"$INSTALL_DIR:\$PATH\""
+    legacy_line="export PATH=\"\$PATH:$INSTALL_DIR\""
+  fi
+
+  if grep -Fxqs "$line" "$profile"; then
+    return 0
+  fi
+  if [[ -n "$legacy_line" ]] && grep -Fxqs "$legacy_line" "$profile"; then
+    return 0
   fi
 
   printf '\n%s\n' "$line" >>"$profile"
