@@ -27,9 +27,8 @@ use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::config::Config;
 use crate::error::{Result, TickError};
 use crate::layout::{
-    Layout as AppLayout, LocalDailyArtifactEntry, LocalSnapshotEntry, infer_snapshot_date_from_key,
+    Layout as AppLayout, LocalSnapshotEntry, infer_snapshot_date_from_key,
 };
-use crate::materialize::materialize_range_days;
 use crate::planner::{TimeWindow, build_sync_plan};
 use crate::syncer::{SyncProgressEvent, acquire_sync_lock, execute_sync_with_progress};
 
@@ -150,13 +149,11 @@ struct DayCoverage {
     remote_keys: Vec<String>,
     local_keys: Vec<String>,
     missing_keys: Vec<String>,
-    daily_artifact_exists: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FileManagerTarget {
     File(PathBuf),
-    Directory(PathBuf),
 }
 
 #[derive(Debug)]
@@ -222,15 +219,8 @@ struct ActiveDaySync {
     failed: usize,
     download_bytes: u64,
     download_total_bytes: Option<u64>,
-    phase: SyncPhase,
     deferred_update: Option<DaySyncUpdate>,
     receiver: UnboundedReceiver<DaySyncUpdate>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SyncPhase {
-    Downloading,
-    Materializing,
 }
 
 #[derive(Debug)]
@@ -246,11 +236,9 @@ enum DaySyncUpdate {
         total_bytes: u64,
     },
     Failed,
-    Materializing,
     Finished {
         downloaded: usize,
         failed: usize,
-        materialized_days: usize,
     },
     Error(String),
 }
@@ -291,7 +279,6 @@ struct RemoteListTui {
     session_priority_bookmarks: BTreeSet<String>,
     local_summaries: BTreeMap<String, LocalDatasetSummary>,
     local_keys: BTreeMap<String, Vec<String>>,
-    daily_artifacts: BTreeSet<String>,
     root: PathBuf,
     concurrency: usize,
     status_message: Option<String>,
@@ -305,7 +292,6 @@ impl RemoteListTui {
     fn new(
         datasets: Vec<RemoteDatasetEntry>,
         local_snapshots: Vec<LocalSnapshotEntry>,
-        local_daily_artifacts: Vec<LocalDailyArtifactEntry>,
         root: PathBuf,
         concurrency: usize,
         seed: RemoteTuiSeed,
@@ -330,7 +316,6 @@ impl RemoteListTui {
         };
         let local_summaries = summarize_local_snapshots(&local_snapshots);
         let local_keys = group_local_snapshot_keys(local_snapshots);
-        let daily_artifacts = group_local_daily_artifacts(local_daily_artifacts);
         let categories = browser_categories(&datasets);
         let mut app = Self {
             datasets,
@@ -343,7 +328,6 @@ impl RemoteListTui {
             session_priority_bookmarks: bookmarks,
             local_summaries,
             local_keys,
-            daily_artifacts,
             root,
             concurrency,
             status_message: bookmark_status,
@@ -513,8 +497,6 @@ impl RemoteListTui {
             &local_keys,
             dataset.start.date_naive(),
             dataset.end.date_naive(),
-            &dataset.dataset,
-            &self.daily_artifacts,
         );
         let selected_day = select_initial_day(&days);
 
@@ -530,10 +512,8 @@ impl RemoteListTui {
     fn reload_local_state(&mut self) -> Result<()> {
         let layout = crate::layout::Layout::new(self.root.clone());
         let local_snapshots = layout.list_local_snapshots()?;
-        let local_daily_artifacts = layout.list_local_daily_artifacts()?;
         self.local_summaries = summarize_local_snapshots(&local_snapshots);
         self.local_keys = group_local_snapshot_keys(local_snapshots);
-        self.daily_artifacts = group_local_daily_artifacts(local_daily_artifacts);
         Ok(())
     }
 
@@ -543,24 +523,20 @@ impl RemoteListTui {
         };
 
         let layout = AppLayout::new(self.root.clone());
-        let artifact_path =
-            layout.daily_path_for_dataset_day(&view.dataset.exchange, &view.dataset.asset, view.selected_coverage().date);
-        let daily_root = layout.daily_root();
-        match daily_artifact_reveal_target(&daily_root, &artifact_path) {
-            Some(FileManagerTarget::File(path)) => {
-                open_in_file_manager(&FileManagerTarget::File(path))?;
-                self.status_message = None;
-            }
-            Some(FileManagerTarget::Directory(path)) => {
-                open_in_file_manager(&FileManagerTarget::Directory(path))?;
-                self.status_message = None;
-            }
-            None => {
-                self.status_message = Some(format!(
-                    "artifact folder not created yet: {}",
-                    artifact_path.display()
-                ));
-            }
+        let day = view.selected_coverage();
+        let Some(key) = day.local_keys.first() else {
+            self.status_message = Some("no local snapshots for this day".into());
+            return Ok(());
+        };
+        let path = layout.data_path_for_key(key)?;
+        if path.is_file() {
+            open_in_file_manager(&FileManagerTarget::File(path))?;
+            self.status_message = None;
+        } else {
+            self.status_message = Some(format!(
+                "local snapshot not found at: {}",
+                path.display()
+            ));
         }
         Ok(())
     }
@@ -609,10 +585,6 @@ impl RemoteListTui {
         let root = self.root.clone();
         let concurrency = self.concurrency;
         let client = client.clone();
-        let exchange = dataset.exchange.clone();
-        let asset = dataset.asset.clone();
-        let from_date = plan.effective_range.from.date_naive();
-        let to_date = plan.effective_range.to.date_naive();
         let (tx, rx) = unbounded_channel();
         let sync_plan = plan.clone();
 
@@ -662,21 +634,10 @@ impl RemoteListTui {
                     }
                 }
             };
-            let _ = tx.send(DaySyncUpdate::Materializing);
-            match materialize_range_days(&client, &layout, &exchange, &asset, from_date, to_date)
-                .await
-            {
-                Ok(materialization) => {
-                    let _ = tx.send(DaySyncUpdate::Finished {
-                        downloaded: execution.downloaded_total(),
-                        failed: execution.failed_total(),
-                        materialized_days: materialization.built_total,
-                    });
-                }
-                Err(err) => {
-                    let _ = tx.send(DaySyncUpdate::Error(err.to_string()));
-                }
-            }
+            let _ = tx.send(DaySyncUpdate::Finished {
+                downloaded: execution.downloaded_total(),
+                failed: execution.failed_total(),
+            });
         });
 
         self.active_sync = Some(ActiveDaySync {
@@ -688,7 +649,6 @@ impl RemoteListTui {
             failed: 0,
             download_bytes: 0,
             download_total_bytes: None,
-            phase: SyncPhase::Downloading,
             deferred_update: None,
             receiver: rx,
         });
@@ -826,24 +786,14 @@ impl RemoteListTui {
                         sync.failed += 1;
                         saw_progress_update = true;
                     }
-                    Ok(DaySyncUpdate::Materializing) => {
-                        if saw_progress_update {
-                            sync.deferred_update = Some(DaySyncUpdate::Materializing);
-                            break;
-                        }
-                        sync.phase = SyncPhase::Materializing;
-                        break;
-                    }
                     Ok(DaySyncUpdate::Finished {
                         downloaded,
                         failed,
-                        materialized_days,
                     }) => {
                         if saw_progress_update {
                             sync.deferred_update = Some(DaySyncUpdate::Finished {
                                 downloaded,
                                 failed,
-                                materialized_days,
                             });
                             break;
                         }
@@ -851,8 +801,8 @@ impl RemoteListTui {
                             sync.dataset.clone(),
                             sync.date,
                             format!(
-                                "synced {} snapshot(s), failed {}, materialized {} day(s)",
-                                downloaded, failed, materialized_days
+                                "synced {} snapshot(s), failed {}",
+                                downloaded, failed,
                             ),
                         ));
                         break;
@@ -895,28 +845,23 @@ impl RemoteListTui {
             }
             self.status_message = Some(status);
         } else if let Some(sync) = &self.active_sync {
-            self.status_message = Some(match sync.phase {
-                SyncPhase::Downloading => {
-                    let progress =
-                        format_byte_progress(sync.download_bytes, sync.download_total_bytes);
-                    if progress.is_empty() {
-                        format!(
-                            "syncing {} ({}/{})",
-                            sync.date,
-                            sync.local_present + sync.downloaded,
-                            sync.remote_total
-                        )
-                    } else {
-                        format!(
-                            "syncing {} ({}/{}, {})",
-                            sync.date,
-                            sync.local_present + sync.downloaded,
-                            sync.remote_total,
-                            progress
-                        )
-                    }
-                }
-                SyncPhase::Materializing => format!("materializing {}", sync.date),
+            let progress =
+                format_byte_progress(sync.download_bytes, sync.download_total_bytes);
+            self.status_message = Some(if progress.is_empty() {
+                format!(
+                    "syncing {} ({}/{})",
+                    sync.date,
+                    sync.local_present + sync.downloaded,
+                    sync.remote_total
+                )
+            } else {
+                format!(
+                    "syncing {} ({}/{}, {})",
+                    sync.date,
+                    sync.local_present + sync.downloaded,
+                    sync.remote_total,
+                    progress
+                )
             });
         }
 
@@ -947,8 +892,6 @@ impl RemoteListTui {
             &local_keys,
             dataset.start.date_naive(),
             dataset.end.date_naive(),
-            &dataset.dataset,
-            &self.daily_artifacts,
         );
         let selected_day = days
             .iter()
@@ -1022,7 +965,6 @@ pub async fn run_remote_list_tui(
     client: PolarisClient,
     datasets: Vec<RemoteDatasetEntry>,
     local_snapshots: Vec<LocalSnapshotEntry>,
-    local_daily_artifacts: Vec<LocalDailyArtifactEntry>,
     root: PathBuf,
     concurrency: usize,
     seed: RemoteTuiSeed,
@@ -1034,7 +976,6 @@ pub async fn run_remote_list_tui(
         RemoteListTui::new(
             datasets,
             local_snapshots,
-            local_daily_artifacts,
             root,
             concurrency,
             seed,
@@ -1681,7 +1622,7 @@ fn render_selected_day_summary(
             "coverage: {}   missing: {}",
             completion_bar, missing_total
         )),
-        Line::from(format_daily_artifact_location(view, day)),
+        Line::from(format_snapshot_location(view, day)),
     ];
     if let Some(status) = status_message {
         lines.push(Line::from(vec![
@@ -1695,57 +1636,19 @@ fn render_selected_day_summary(
         .block(Block::default().title("Selected Day").borders(Borders::ALL))
 }
 
-fn format_daily_artifact_location(view: &DatasetView, day: &DayCoverage) -> String {
-    let artifact_path = format!(
-        "daily/{}",
-        AppLayout::daily_relative_path_for_dataset_day(
-            &view.dataset.exchange,
-            &view.dataset.asset,
-            day.date,
-        )
-        .to_string_lossy()
-    );
-    if day.daily_artifact_exists {
-        format!("stored at: {artifact_path}")
-    } else {
-        format!("will store at: {artifact_path}")
+fn format_snapshot_location(_view: &DatasetView, day: &DayCoverage) -> String {
+    match day.local_keys.first() {
+        Some(key) => format!("snapshot: {key}"),
+        None => "no local snapshots".into(),
     }
-}
-
-fn daily_artifact_reveal_target(daily_root: &Path, artifact_path: &Path) -> Option<FileManagerTarget> {
-    if artifact_path.is_file() {
-        return Some(FileManagerTarget::File(artifact_path.to_path_buf()));
-    }
-
-    let parent = artifact_path.parent()?;
-    if parent.is_dir() {
-        return Some(FileManagerTarget::Directory(parent.to_path_buf()));
-    }
-
-    let exchange_dir = parent.parent()?;
-    if exchange_dir.is_dir() {
-        return Some(FileManagerTarget::Directory(exchange_dir.to_path_buf()));
-    }
-
-    if daily_root.is_dir() {
-        return Some(FileManagerTarget::Directory(daily_root.to_path_buf()));
-    }
-
-    None
 }
 
 fn open_in_file_manager(target: &FileManagerTarget) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let mut command = Command::new("open");
-        match target {
-            FileManagerTarget::File(path) => {
-                command.arg("-R").arg(path);
-            }
-            FileManagerTarget::Directory(path) => {
-                command.arg(path);
-            }
-        }
+        let FileManagerTarget::File(path) = target;
+        command.arg("-R").arg(path);
         command
             .spawn()
             .with_context(|| "failed to launch Finder".to_string())
@@ -1756,14 +1659,8 @@ fn open_in_file_manager(target: &FileManagerTarget) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         let mut command = Command::new("explorer");
-        match target {
-            FileManagerTarget::File(path) => {
-                command.arg(format!("/select,{}", path.display()));
-            }
-            FileManagerTarget::Directory(path) => {
-                command.arg(path);
-            }
-        }
+        let FileManagerTarget::File(path) = target;
+        command.arg(format!("/select,{}", path.display()));
         command
             .spawn()
             .with_context(|| "failed to launch Explorer".to_string())
@@ -1773,10 +1670,8 @@ fn open_in_file_manager(target: &FileManagerTarget) -> Result<()> {
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let path = match target {
-            FileManagerTarget::File(path) => path.parent().unwrap_or(path),
-            FileManagerTarget::Directory(path) => path.as_path(),
-        };
+        let FileManagerTarget::File(path) = target;
+        let path = path.parent().unwrap_or(path);
         Command::new("xdg-open")
             .arg(path)
             .spawn()
@@ -1888,8 +1783,6 @@ fn build_day_coverages(
     local_keys: &[String],
     start_date: NaiveDate,
     end_date: NaiveDate,
-    dataset: &str,
-    daily_artifacts: &BTreeSet<String>,
 ) -> Vec<DayCoverage> {
     let mut days = Vec::new();
     let mut current = start_date;
@@ -1899,7 +1792,6 @@ fn build_day_coverages(
             remote_keys: Vec::new(),
             local_keys: Vec::new(),
             missing_keys: Vec::new(),
-            daily_artifact_exists: daily_artifacts.contains(&format!("{dataset}:{current}")),
         });
         current += ChronoDuration::days(1);
     }
@@ -1939,13 +1831,6 @@ fn select_initial_day(days: &[DayCoverage]) -> usize {
 
 fn snapshot_date_from_key(key: &str) -> Option<NaiveDate> {
     infer_snapshot_date_from_key(key)
-}
-
-fn group_local_daily_artifacts(entries: Vec<LocalDailyArtifactEntry>) -> BTreeSet<String> {
-    entries
-        .into_iter()
-        .map(|entry| format!("{}:{}:{}", entry.exchange, entry.asset, entry.date))
-        .collect()
 }
 
 fn compact_count(count: usize) -> String {
@@ -2011,10 +1896,7 @@ fn sync_adjusted_day_totals<'a>(
         if sync.dataset == view.dataset.dataset && sync.date == day.date {
             let local_total = (sync.local_present + sync.downloaded).min(sync.remote_total);
             let missing_total = sync.remote_total.saturating_sub(local_total);
-            let state = match sync.phase {
-                SyncPhase::Downloading => "syncing",
-                SyncPhase::Materializing => "materializing",
-            };
+            let state = "syncing";
             return (sync.remote_total, local_total, missing_total, state);
         }
     }
@@ -2185,10 +2067,9 @@ mod tests {
 
     use super::{
         ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView, DaySyncUpdate,
-        FileManagerTarget, RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed, SyncPhase,
-        api_key_requirement_for_download, build_day_coverages, diff_missing_snapshot_keys,
-        daily_artifact_reveal_target, format_daily_artifact_location, load_bookmarks,
-        save_bookmarks,
+        RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed, api_key_requirement_for_download,
+        build_day_coverages, diff_missing_snapshot_keys, format_snapshot_location,
+        load_bookmarks, save_bookmarks,
     };
     use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
     use crate::layout::LocalSnapshotEntry;
@@ -2227,7 +2108,6 @@ mod tests {
         let app = RemoteListTui::new(
             datasets,
             Vec::<LocalSnapshotEntry>::new(),
-            Vec::new(),
             PathBuf::from("/tmp/tick"),
             4,
             RemoteTuiSeed {
@@ -2278,7 +2158,6 @@ mod tests {
         let app = RemoteListTui::new(
             datasets,
             Vec::<LocalSnapshotEntry>::new(),
-            Vec::new(),
             PathBuf::from("/tmp/tick"),
             4,
             RemoteTuiSeed {
@@ -2332,7 +2211,6 @@ mod tests {
                 },
             ],
             Vec::<LocalSnapshotEntry>::new(),
-            Vec::new(),
             tempdir.path().to_path_buf(),
             4,
             RemoteTuiSeed::default(),
@@ -2380,7 +2258,6 @@ mod tests {
                 },
             ],
             Vec::<LocalSnapshotEntry>::new(),
-            Vec::new(),
             tempdir.path().to_path_buf(),
             4,
             RemoteTuiSeed::default(),
@@ -2435,7 +2312,6 @@ mod tests {
                 },
             ],
             Vec::<LocalSnapshotEntry>::new(),
-            Vec::new(),
             tempdir.path().to_path_buf(),
             4,
             RemoteTuiSeed::default(),
@@ -2536,7 +2412,6 @@ mod tests {
                 dataset: bookmarked.clone(),
             }],
             Vec::<LocalSnapshotEntry>::new(),
-            Vec::new(),
             tempdir.path().to_path_buf(),
             4,
             RemoteTuiSeed::default(),
@@ -2597,8 +2472,6 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 6, 4, 0, 0, 0)
                 .unwrap()
                 .date_naive(),
-            "aster:BTCUSDT",
-            &BTreeSet::new(),
         );
 
         assert_eq!(days[0].missing_keys.len(), 0);
@@ -2608,7 +2481,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_day_summary_reports_daily_artifact_location() {
+    fn selected_day_summary_reports_snapshot_location() {
         let dataset = RemoteDatasetEntry {
             exchange: "aster".into(),
             asset: "BTCUSDT".into(),
@@ -2623,13 +2496,11 @@ mod tests {
             dataset: "aster:BTCUSDT".into(),
         };
         let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
-        let mut days = build_day_coverages(
+        let days = build_day_coverages(
             Vec::new(),
             &[],
             date,
             date,
-            &dataset.dataset,
-            &BTreeSet::new(),
         );
         let view = DatasetView {
             dataset: dataset.clone(),
@@ -2637,47 +2508,24 @@ mod tests {
             selected_day: 0,
         };
         assert_eq!(
-            format_daily_artifact_location(&view, &view.days[0]),
-            "will store at: daily/aster/BTCUSDT/2026-06-01.jsonl.zst"
+            format_snapshot_location(&view, &view.days[0]),
+            "no local snapshots"
         );
 
-        days[0].daily_artifact_exists = true;
+        let days = build_day_coverages(
+            Vec::new(),
+            &["bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into()],
+            date,
+            date,
+        );
         let view = DatasetView {
             dataset,
             days,
             selected_day: 0,
         };
         assert_eq!(
-            format_daily_artifact_location(&view, &view.days[0]),
-            "stored at: daily/aster/BTCUSDT/2026-06-01.jsonl.zst"
-        );
-    }
-
-    #[test]
-    fn reveal_target_prefers_exact_artifact_file() {
-        let tempdir = tempfile::TempDir::new().expect("tempdir");
-        let daily_root = tempdir.path().join("daily");
-        let artifact_path = daily_root.join("aster/BTCUSDT/2026-06-01.jsonl.zst");
-        std::fs::create_dir_all(artifact_path.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&artifact_path, b"snapshot").expect("write");
-
-        assert_eq!(
-            daily_artifact_reveal_target(&daily_root, &artifact_path),
-            Some(FileManagerTarget::File(artifact_path))
-        );
-    }
-
-    #[test]
-    fn reveal_target_falls_back_to_daily_directory_when_artifact_is_missing() {
-        let tempdir = tempfile::TempDir::new().expect("tempdir");
-        let daily_root = tempdir.path().join("daily");
-        let artifact_path = daily_root.join("aster/BTCUSDT/2026-06-01.jsonl.zst");
-        let asset_dir = daily_root.join("aster/BTCUSDT");
-        std::fs::create_dir_all(&asset_dir).expect("mkdir");
-
-        assert_eq!(
-            daily_artifact_reveal_target(&daily_root, &artifact_path),
-            Some(FileManagerTarget::Directory(asset_dir))
+            format_snapshot_location(&view, &view.days[0]),
+            "snapshot: bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst"
         );
     }
 
@@ -2701,7 +2549,6 @@ mod tests {
         let mut app = RemoteListTui::new(
             vec![dataset.clone()],
             Vec::<LocalSnapshotEntry>::new(),
-            Vec::new(),
             tempdir.path().to_path_buf(),
             4,
             RemoteTuiSeed::default(),
@@ -2716,8 +2563,6 @@ mod tests {
                 &[],
                 date,
                 date,
-                &dataset.dataset,
-                &BTreeSet::new(),
             ),
             selected_day: 0,
         });
@@ -2733,12 +2578,9 @@ mod tests {
         .expect("progress");
         tx.send(DaySyncUpdate::Downloaded { total_bytes: 2048 })
             .expect("downloaded");
-        tx.send(DaySyncUpdate::Materializing)
-            .expect("materializing");
         tx.send(DaySyncUpdate::Finished {
             downloaded: 1,
             failed: 0,
-            materialized_days: 1,
         })
         .expect("finished");
         drop(tx);
@@ -2751,7 +2593,6 @@ mod tests {
             failed: 0,
             download_bytes: 0,
             download_total_bytes: None,
-            phase: SyncPhase::Downloading,
             deferred_update: None,
             receiver: rx,
         });
@@ -2767,29 +2608,15 @@ mod tests {
         assert_eq!(sync.downloaded, 1);
         assert_eq!(sync.download_bytes, 2048);
         assert_eq!(sync.download_total_bytes, Some(2048));
-        assert_eq!(sync.phase, SyncPhase::Downloading);
-        assert!(matches!(
-            sync.deferred_update,
-            Some(DaySyncUpdate::Materializing)
-        ));
         assert_eq!(
             app.status_message.as_deref(),
             Some("syncing 2026-06-01 (1/1, 2.00 KiB / 2.00 KiB)")
         );
 
         app.pump_sync_updates(&client).await.expect("second pump");
-        let sync = app.active_sync.as_ref().expect("sync still active");
-        assert_eq!(sync.phase, SyncPhase::Materializing);
-        assert!(sync.deferred_update.is_none());
         assert_eq!(
             app.status_message.as_deref(),
-            Some("materializing 2026-06-01")
-        );
-
-        app.pump_sync_updates(&client).await.expect("third pump");
-        assert_eq!(
-            app.status_message.as_deref(),
-            Some("synced 1 snapshot(s), failed 0, materialized 1 day(s)")
+            Some("synced 1 snapshot(s), failed 0")
         );
         assert!(app.active_sync.is_none());
     }
