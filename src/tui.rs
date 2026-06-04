@@ -398,6 +398,9 @@ impl RemoteListTui {
     fn category_display_labels(&self) -> Vec<String> {
         self.categories
             .iter()
+            .cycle()
+            .skip(self.selected_category)
+            .take(self.categories.len())
             .map(|category| category.label().to_ascii_lowercase())
             .collect()
     }
@@ -1401,7 +1404,7 @@ fn category_carousel_title(app: &RemoteListTui) -> Title<'static> {
             spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
         }
 
-        let is_active = index == app.selected_category;
+        let is_active = index == 0;
         let text = if is_active {
             format!("*{label}*")
         } else {
@@ -1440,46 +1443,31 @@ fn render_dataset_view(
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),
             Constraint::Min(8),
-            Constraint::Length(12),
+            Constraint::Length(7),
             Constraint::Length(1),
         ])
         .split(frame.area());
 
-    let mut summary_lines = vec![
-        Line::from(vec![Span::styled(
-            view.dataset.dataset.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(format!("data starting from {}", view.dataset.start)),
-        Line::from(format!("access: {}", view.dataset.access_details())),
-        Line::from(format!(
-            "bookmarked: {}",
-            if is_bookmarked { "yes" } else { "no" }
-        )),
-    ];
-    if let Some(status) = status_message {
-        summary_lines.push(Line::from(format!("status: {status}")));
-    }
-
-    let summary = Paragraph::new(summary_lines)
-        .wrap(Wrap { trim: true })
-        .block(Block::default().title("Dataset View").borders(Borders::ALL));
-    frame.render_widget(summary, areas[0]);
-
-    frame.render_widget(render_day_grid(view, active_sync, spinner_tick), areas[1]);
-    frame.render_widget(render_selected_day_summary(view, active_sync), areas[2]);
+    frame.render_widget(
+        render_day_grid(view, is_bookmarked, active_sync, spinner_tick),
+        areas[0],
+    );
+    frame.render_widget(
+        render_selected_day_summary(view, active_sync, status_message),
+        areas[1],
+    );
 
     render_footer(
         frame,
-        areas[3],
+        areas[2],
         " Enter sync day  │  Tab next day  │  ←/→ move day  │  ↑/↓ move week  │  Esc back  │  Ctrl+C quit ",
     );
 }
 
 fn render_day_grid(
     view: &DatasetView,
+    is_bookmarked: bool,
     active_sync: Option<&ActiveDaySync>,
     spinner_tick: usize,
 ) -> Paragraph<'static> {
@@ -1548,9 +1536,27 @@ fn render_day_grid(
         month_start = month_end;
     }
 
+    let mut dataset_title_spans = vec![Span::styled(
+        view.dataset.access_badge(),
+        Style::default().fg(access_color(view.dataset.access.as_ref())),
+    )];
+    if is_bookmarked {
+        dataset_title_spans.push(Span::styled(" *", Style::default().fg(Color::Yellow)));
+    }
+    dataset_title_spans.push(Span::raw(" "));
+    dataset_title_spans.push(Span::styled(
+        view.dataset.dataset.clone(),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+
     Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .title("Daily Coverage")
+            .title(Title {
+                content: Line::from(dataset_title_spans).alignment(Alignment::Right),
+                alignment: Some(Alignment::Right),
+                position: None,
+            })
             .borders(Borders::ALL),
     )
 }
@@ -1604,43 +1610,64 @@ fn render_day_cell(
 fn render_selected_day_summary(
     view: &DatasetView,
     active_sync: Option<&ActiveDaySync>,
+    status_message: Option<&str>,
 ) -> Paragraph<'static> {
     let day = view.selected_coverage();
     let (remote_total, local_total, missing_total, state) =
         sync_adjusted_day_totals(view, day, active_sync);
     let remote_window = format_snapshot_window(&day.remote_keys);
     let local_window = format_snapshot_window(&day.local_keys);
-    let completion_bar = render_completion_bar(local_total, remote_total, 24);
+    let completion_bar = render_completion_bar(local_total, remote_total, 18);
     let byte_progress = active_sync
         .filter(|sync| sync.dataset == view.dataset.dataset && sync.date == day.date)
         .map(|sync| format_byte_progress(sync.download_bytes, sync.download_total_bytes))
         .filter(|progress| !progress.is_empty())
         .unwrap_or_else(|| "-".to_string());
+    let state_style = match state {
+        "full" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        "partial" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        "none local" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        "no remote data" => Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        "syncing" | "materializing" => {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        }
+        _ => Style::default().add_modifier(Modifier::BOLD),
+    };
 
-    Paragraph::new(vec![
-        Line::from(vec![Span::styled(
-            day.date.to_string(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(format!("state: {}", state)),
-        Line::from(format!("coverage: {}", completion_bar)),
-        Line::from(format!("remote snapshots: {}", remote_total)),
-        Line::from(format!("local snapshots: {}", local_total)),
-        Line::from(format!("missing snapshots: {}", missing_total)),
-        Line::from(format!("download bytes: {}", byte_progress)),
-        Line::from(format!("remote window: {}", remote_window)),
-        Line::from(format!("local window: {}", local_window)),
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                day.date.to_string(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(state.to_ascii_uppercase(), state_style),
+        ]),
         Line::from(format!(
-            "daily artifact: {}",
+            "coverage: {}   missing: {}",
+            completion_bar, missing_total
+        )),
+        Line::from(format!("remote: {}   local: {}", remote_window, local_window)),
+        Line::from(format!(
+            "artifact: {}   bytes: {}",
             if day.daily_artifact_exists {
                 "present"
             } else {
                 "absent"
-            }
+            },
+            byte_progress
         )),
-    ])
-    .wrap(Wrap { trim: true })
-    .block(Block::default().title("Day Details").borders(Borders::ALL))
+    ];
+    if let Some(status) = status_message {
+        lines.push(Line::from(vec![
+            Span::styled("status: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(status.to_string()),
+        ]));
+    }
+
+    Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .block(Block::default().title("Selected Day").borders(Borders::ALL))
 }
 
 fn render_api_key_prompt(frame: &mut ratatui::Frame<'_>, prompt: &ApiKeyPromptState) {
@@ -2345,9 +2372,37 @@ mod tests {
             vec!["All", "Bookmarks", "Futures", "Spot"]
         );
         assert_eq!(app.selected_category().label(), "All");
+        assert_eq!(
+            app.category_display_labels(),
+            vec!["all", "bookmarks", "futures", "spot"]
+        );
+
+        app.cycle_category(-1);
+        assert_eq!(app.selected_category().label(), "Spot");
+        assert_eq!(
+            app.category_display_labels(),
+            vec!["spot", "all", "bookmarks", "futures"]
+        );
+        assert_eq!(app.filtered_indices.len(), 1);
+        assert_eq!(
+            app.selected_dataset()
+                .map(|dataset| dataset.dataset.as_str()),
+            Some("aster:BTCUSDT")
+        );
+
+        app.cycle_category(1);
+        assert_eq!(app.selected_category().label(), "All");
+        assert_eq!(
+            app.category_display_labels(),
+            vec!["all", "bookmarks", "futures", "spot"]
+        );
 
         app.cycle_category(1);
         assert_eq!(app.selected_category().label(), "Bookmarks");
+        assert_eq!(
+            app.category_display_labels(),
+            vec!["bookmarks", "futures", "spot", "all"]
+        );
         assert_eq!(app.filtered_indices.len(), 1);
         assert_eq!(
             app.selected_dataset()
@@ -2357,6 +2412,10 @@ mod tests {
 
         app.cycle_category(1);
         assert_eq!(app.selected_category().label(), "Futures");
+        assert_eq!(
+            app.category_display_labels(),
+            vec!["futures", "spot", "all", "bookmarks"]
+        );
         assert_eq!(app.filtered_indices.len(), 1);
         assert_eq!(
             app.selected_dataset()
@@ -2366,6 +2425,10 @@ mod tests {
 
         app.cycle_category(1);
         assert_eq!(app.selected_category().label(), "Spot");
+        assert_eq!(
+            app.category_display_labels(),
+            vec!["spot", "all", "bookmarks", "futures"]
+        );
         assert_eq!(app.filtered_indices.len(), 1);
         assert_eq!(
             app.selected_dataset()
