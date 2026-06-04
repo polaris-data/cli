@@ -254,7 +254,6 @@ polaris list local --json
 Downloads missing snapshots for the requested dataset and time range.
 
 After sync completes, the fetched snapshots are stored under `data/` within the configured local root.
-
 ```bash
 polaris sync \
   --exchange aster \

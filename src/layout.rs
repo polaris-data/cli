@@ -164,7 +164,7 @@ fn collect_snapshot_files(
     Ok(())
 }
 
-pub fn infer_snapshot_date_from_key(key: &str) -> Option<NaiveDate> {
+pub fn infer_snapshot_date_from_key(key: &str) -> Option<chrono::NaiveDate> {
     let segments = key.split('/').collect::<Vec<_>>();
     infer_date_from_segments(&segments).or_else(|| {
         segments

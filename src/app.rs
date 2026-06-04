@@ -354,7 +354,6 @@ async fn run_reset(config: &Config, args: ResetArgs) -> Result<u8> {
     let _guard = acquire_sync_lock(&layout)?;
 
     let snapshot_total = layout.list_local_snapshots()?.len();
-
     let candidate_roots = vec![
         layout.data_root(),
         layout.tmp_root(),
@@ -689,10 +688,7 @@ struct ResetOutput {
 }
 
 impl SyncOutput {
-    fn from_parts(
-        plan: &SyncPlan,
-        execution: SyncExecution,
-    ) -> Self {
+    fn from_parts(plan: &SyncPlan, execution: SyncExecution) -> Self {
         Self {
             command: "sync",
             exchange: plan.exchange.clone(),

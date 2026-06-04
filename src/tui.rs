@@ -154,6 +154,7 @@ struct DayCoverage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FileManagerTarget {
     File(PathBuf),
+    Directory(PathBuf),
 }
 
 #[derive(Debug)]
@@ -517,26 +518,43 @@ impl RemoteListTui {
         Ok(())
     }
 
-    fn reveal_selected_day_artifact(&mut self) -> Result<()> {
+    fn reveal_selected_day_snapshot(&mut self) -> Result<()> {
         let Some(view) = self.dataset_view() else {
             return Ok(());
         };
 
         let layout = AppLayout::new(self.root.clone());
         let day = view.selected_coverage();
-        let Some(key) = day.local_keys.first() else {
-            self.status_message = Some("no local snapshots for this day".into());
-            return Ok(());
-        };
-        let path = layout.data_path_for_key(key)?;
-        if path.is_file() {
-            open_in_file_manager(&FileManagerTarget::File(path))?;
-            self.status_message = None;
+        let keys = if day.local_keys.is_empty() {
+            &day.remote_keys
         } else {
-            self.status_message = Some(format!(
-                "local snapshot not found at: {}",
-                path.display()
-            ));
+            &day.local_keys
+        };
+        let mut snapshot_paths = Vec::new();
+        for key in keys {
+            snapshot_paths.push(layout.data_path_for_key(key)?);
+        }
+
+        let data_root = layout.data_root();
+        let fallback_path = snapshot_paths
+            .first()
+            .cloned()
+            .unwrap_or_else(|| data_root.clone());
+        match snapshot_reveal_target(&data_root, &snapshot_paths) {
+            Some(FileManagerTarget::File(path)) => {
+                open_in_file_manager(&FileManagerTarget::File(path))?;
+                self.status_message = None;
+            }
+            Some(FileManagerTarget::Directory(path)) => {
+                open_in_file_manager(&FileManagerTarget::Directory(path))?;
+                self.status_message = None;
+            }
+            None => {
+                self.status_message = Some(format!(
+                    "snapshot folder not created yet: {}",
+                    fallback_path.display()
+                ));
+            }
         }
         Ok(())
     }
@@ -786,24 +804,16 @@ impl RemoteListTui {
                         sync.failed += 1;
                         saw_progress_update = true;
                     }
-                    Ok(DaySyncUpdate::Finished {
-                        downloaded,
-                        failed,
-                    }) => {
+                    Ok(DaySyncUpdate::Finished { downloaded, failed }) => {
                         if saw_progress_update {
-                            sync.deferred_update = Some(DaySyncUpdate::Finished {
-                                downloaded,
-                                failed,
-                            });
+                            sync.deferred_update =
+                                Some(DaySyncUpdate::Finished { downloaded, failed });
                             break;
                         }
                         finished = Some((
                             sync.dataset.clone(),
                             sync.date,
-                            format!(
-                                "synced {} snapshot(s), failed {}",
-                                downloaded, failed,
-                            ),
+                            format!("synced {} snapshot(s), failed {}", downloaded, failed),
                         ));
                         break;
                     }
@@ -1097,7 +1107,7 @@ async fn run_event_loop(
                             }
                         }
                         ViewMode::Dataset(_) => {
-                            if let Err(err) = app.reveal_selected_day_artifact() {
+                            if let Err(err) = app.reveal_selected_day_snapshot() {
                                 app.status_message = Some(format!("error: {err}"));
                             }
                         }
@@ -1603,9 +1613,7 @@ fn render_selected_day_summary(
         "partial" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         "none local" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         "no remote data" => Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-        "syncing" | "materializing" => {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-        }
+        "syncing" => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         _ => Style::default().add_modifier(Modifier::BOLD),
     };
 
@@ -1636,19 +1644,67 @@ fn render_selected_day_summary(
         .block(Block::default().title("Selected Day").borders(Borders::ALL))
 }
 
-fn format_snapshot_location(_view: &DatasetView, day: &DayCoverage) -> String {
-    match day.local_keys.first() {
-        Some(key) => format!("snapshot: {key}"),
-        None => "no local snapshots".into(),
+fn format_snapshot_location(view: &DatasetView, day: &DayCoverage) -> String {
+    let key = day.local_keys.first().or_else(|| day.remote_keys.first());
+    let path = key
+        .and_then(|key| AppLayout::new(PathBuf::new()).data_path_for_key(key).ok())
+        .map(|path| {
+            path.parent()
+                .map(|parent| parent.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|| "data".into())
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "data/<source>/{}/{}/{}",
+                view.dataset.exchange, view.dataset.asset, day.date
+            )
+        });
+    if day.local_keys.is_empty() {
+        format!("will store under: {path}")
+    } else {
+        format!("stored under: {path}")
     }
 }
 
+fn snapshot_reveal_target(data_root: &Path, snapshot_paths: &[PathBuf]) -> Option<FileManagerTarget> {
+    for path in snapshot_paths {
+        if path.is_file() {
+            return Some(FileManagerTarget::File(path.clone()));
+        }
+        if path.is_dir() {
+            return Some(FileManagerTarget::Directory(path.clone()));
+        }
+
+        let mut parent = path.parent();
+        while let Some(dir) = parent {
+            if dir.is_dir() {
+                return Some(FileManagerTarget::Directory(dir.to_path_buf()));
+            }
+            if dir == data_root {
+                break;
+            }
+            parent = dir.parent();
+        }
+    }
+
+    if data_root.is_dir() {
+        return Some(FileManagerTarget::Directory(data_root.to_path_buf()));
+    }
+
+    None
+}
 fn open_in_file_manager(target: &FileManagerTarget) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let mut command = Command::new("open");
-        let FileManagerTarget::File(path) = target;
-        command.arg("-R").arg(path);
+        match target {
+            FileManagerTarget::File(path) => {
+                command.arg("-R").arg(path);
+            }
+            FileManagerTarget::Directory(path) => {
+                command.arg(path);
+            }
+        }
         command
             .spawn()
             .with_context(|| "failed to launch Finder".to_string())
@@ -1659,8 +1715,14 @@ fn open_in_file_manager(target: &FileManagerTarget) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         let mut command = Command::new("explorer");
-        let FileManagerTarget::File(path) = target;
-        command.arg(format!("/select,{}", path.display()));
+        match target {
+            FileManagerTarget::File(path) => {
+                command.arg(format!("/select,{}", path.display()));
+            }
+            FileManagerTarget::Directory(path) => {
+                command.arg(path);
+            }
+        }
         command
             .spawn()
             .with_context(|| "failed to launch Explorer".to_string())
@@ -1670,8 +1732,10 @@ fn open_in_file_manager(target: &FileManagerTarget) -> Result<()> {
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let FileManagerTarget::File(path) = target;
-        let path = path.parent().unwrap_or(path);
+        let path = match target {
+            FileManagerTarget::File(path) => path.parent().unwrap_or(path),
+            FileManagerTarget::Directory(path) => path.as_path(),
+        };
         Command::new("xdg-open")
             .arg(path)
             .spawn()
@@ -2067,9 +2131,9 @@ mod tests {
 
     use super::{
         ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView, DaySyncUpdate,
-        RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed, api_key_requirement_for_download,
-        build_day_coverages, diff_missing_snapshot_keys, format_snapshot_location,
-        load_bookmarks, save_bookmarks,
+        FileManagerTarget, RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed,
+        api_key_requirement_for_download, build_day_coverages, diff_missing_snapshot_keys,
+        format_snapshot_location, load_bookmarks, save_bookmarks, snapshot_reveal_target,
     };
     use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
     use crate::layout::LocalSnapshotEntry;
@@ -2496,7 +2560,7 @@ mod tests {
             dataset: "aster:BTCUSDT".into(),
         };
         let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
-        let days = build_day_coverages(
+        let mut days = build_day_coverages(
             Vec::new(),
             &[],
             date,
@@ -2509,15 +2573,10 @@ mod tests {
         };
         assert_eq!(
             format_snapshot_location(&view, &view.days[0]),
-            "no local snapshots"
+            "will store under: data/<source>/aster/BTCUSDT/2026-06-01"
         );
 
-        let days = build_day_coverages(
-            Vec::new(),
-            &["bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into()],
-            date,
-            date,
-        );
+        days[0].local_keys = vec!["bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into()];
         let view = DatasetView {
             dataset,
             days,
@@ -2525,12 +2584,53 @@ mod tests {
         };
         assert_eq!(
             format_snapshot_location(&view, &view.days[0]),
-            "snapshot: bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst"
+            "stored under: data/bronze/aster/BTCUSDT/2026-06-01"
+        );
+    }
+
+    #[test]
+    fn reveal_target_prefers_exact_snapshot_file() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let data_root = tempdir.path().join("data");
+        let snapshot_path = data_root.join("bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst");
+        std::fs::create_dir_all(snapshot_path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&snapshot_path, b"snapshot").expect("write");
+
+        assert_eq!(
+            snapshot_reveal_target(&data_root, std::slice::from_ref(&snapshot_path)),
+            Some(FileManagerTarget::File(snapshot_path))
+        );
+    }
+
+    #[test]
+    fn reveal_target_falls_back_to_snapshot_directory_when_file_is_missing() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let data_root = tempdir.path().join("data");
+        let snapshot_path = data_root.join("bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst");
+        let day_dir = data_root.join("bronze/aster/BTCUSDT/2026-06-01");
+        std::fs::create_dir_all(&day_dir).expect("mkdir");
+
+        assert_eq!(
+            snapshot_reveal_target(&data_root, std::slice::from_ref(&snapshot_path)),
+            Some(FileManagerTarget::Directory(day_dir))
+        );
+    }
+
+    #[test]
+    fn reveal_target_falls_back_to_data_root_when_no_snapshot_parents_exist() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let data_root = tempdir.path().join("data");
+        std::fs::create_dir_all(&data_root).expect("mkdir");
+        let snapshot_path = data_root.join("bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst");
+
+        assert_eq!(
+            snapshot_reveal_target(&data_root, &[snapshot_path]),
+            Some(FileManagerTarget::Directory(data_root))
         );
     }
 
     #[tokio::test]
-    async fn sync_updates_do_not_skip_progress_or_materializing_frames() {
+    async fn sync_updates_do_not_skip_progress_frames() {
         let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
         let dataset = RemoteDatasetEntry {
             exchange: "aster".into(),
@@ -2608,6 +2708,7 @@ mod tests {
         assert_eq!(sync.downloaded, 1);
         assert_eq!(sync.download_bytes, 2048);
         assert_eq!(sync.download_total_bytes, Some(2048));
+        assert!(matches!(sync.deferred_update, Some(DaySyncUpdate::Finished { .. })));
         assert_eq!(
             app.status_message.as_deref(),
             Some("syncing 2026-06-01 (1/1, 2.00 KiB / 2.00 KiB)")
