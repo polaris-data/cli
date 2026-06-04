@@ -26,7 +26,9 @@ use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntr
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::config::Config;
 use crate::error::{Result, TickError};
-use crate::layout::{Layout as AppLayout, LocalSnapshotEntry, infer_snapshot_date_from_key};
+use crate::layout::{
+    Layout as AppLayout, LocalSnapshotEntry, infer_snapshot_date_from_key,
+};
 use crate::planner::{TimeWindow, build_sync_plan};
 use crate::syncer::{SyncProgressEvent, acquire_sync_lock, execute_sync_with_progress};
 
@@ -218,14 +220,8 @@ struct ActiveDaySync {
     failed: usize,
     download_bytes: u64,
     download_total_bytes: Option<u64>,
-    phase: SyncPhase,
     deferred_update: Option<DaySyncUpdate>,
     receiver: UnboundedReceiver<DaySyncUpdate>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SyncPhase {
-    Downloading,
 }
 
 #[derive(Debug)]
@@ -671,7 +667,6 @@ impl RemoteListTui {
             failed: 0,
             download_bytes: 0,
             download_total_bytes: None,
-            phase: SyncPhase::Downloading,
             deferred_update: None,
             receiver: rx,
         });
@@ -860,27 +855,23 @@ impl RemoteListTui {
             }
             self.status_message = Some(status);
         } else if let Some(sync) = &self.active_sync {
-            self.status_message = Some(match sync.phase {
-                SyncPhase::Downloading => {
-                    let progress =
-                        format_byte_progress(sync.download_bytes, sync.download_total_bytes);
-                    if progress.is_empty() {
-                        format!(
-                            "syncing {} ({}/{})",
-                            sync.date,
-                            sync.local_present + sync.downloaded,
-                            sync.remote_total
-                        )
-                    } else {
-                        format!(
-                            "syncing {} ({}/{}, {})",
-                            sync.date,
-                            sync.local_present + sync.downloaded,
-                            sync.remote_total,
-                            progress
-                        )
-                    }
-                }
+            let progress =
+                format_byte_progress(sync.download_bytes, sync.download_total_bytes);
+            self.status_message = Some(if progress.is_empty() {
+                format!(
+                    "syncing {} ({}/{})",
+                    sync.date,
+                    sync.local_present + sync.downloaded,
+                    sync.remote_total
+                )
+            } else {
+                format!(
+                    "syncing {} ({}/{}, {})",
+                    sync.date,
+                    sync.local_present + sync.downloaded,
+                    sync.remote_total,
+                    progress
+                )
             });
         }
 
@@ -1702,7 +1693,6 @@ fn snapshot_reveal_target(data_root: &Path, snapshot_paths: &[PathBuf]) -> Optio
 
     None
 }
-
 fn open_in_file_manager(target: &FileManagerTarget) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -1970,9 +1960,7 @@ fn sync_adjusted_day_totals<'a>(
         if sync.dataset == view.dataset.dataset && sync.date == day.date {
             let local_total = (sync.local_present + sync.downloaded).min(sync.remote_total);
             let missing_total = sync.remote_total.saturating_sub(local_total);
-            let state = match sync.phase {
-                SyncPhase::Downloading => "syncing",
-            };
+            let state = "syncing";
             return (sync.remote_total, local_total, missing_total, state);
         }
     }
@@ -2143,7 +2131,7 @@ mod tests {
 
     use super::{
         ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView, DaySyncUpdate,
-        FileManagerTarget, RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed, SyncPhase,
+        FileManagerTarget, RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed,
         api_key_requirement_for_download, build_day_coverages, diff_missing_snapshot_keys,
         format_snapshot_location, load_bookmarks, save_bookmarks, snapshot_reveal_target,
     };
@@ -2705,7 +2693,6 @@ mod tests {
             failed: 0,
             download_bytes: 0,
             download_total_bytes: None,
-            phase: SyncPhase::Downloading,
             deferred_update: None,
             receiver: rx,
         });
@@ -2721,7 +2708,6 @@ mod tests {
         assert_eq!(sync.downloaded, 1);
         assert_eq!(sync.download_bytes, 2048);
         assert_eq!(sync.download_total_bytes, Some(2048));
-        assert_eq!(sync.phase, SyncPhase::Downloading);
         assert!(matches!(sync.deferred_update, Some(DaySyncUpdate::Finished { .. })));
         assert_eq!(
             app.status_message.as_deref(),
