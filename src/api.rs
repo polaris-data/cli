@@ -84,7 +84,7 @@ pub enum DatasetAccessStatus {
 impl DatasetAccess {
     pub fn search_text(&self) -> String {
         match self.status {
-            DatasetAccessStatus::Open => "open".into(),
+            DatasetAccessStatus::Open => "public".into(),
             DatasetAccessStatus::Restricted => "restricted".into(),
             DatasetAccessStatus::Preview => match self.public_cutoff_date {
                 Some(date) => format!("preview {}", date),
@@ -103,7 +103,7 @@ impl DatasetAccess {
 
     pub fn status_label(&self) -> &'static str {
         match self.status {
-            DatasetAccessStatus::Open => "open",
+            DatasetAccessStatus::Open => "public",
             DatasetAccessStatus::Preview => "preview",
             DatasetAccessStatus::Restricted => "restricted",
         }
@@ -121,7 +121,7 @@ impl DatasetAccess {
 
     pub fn summary_label(&self) -> String {
         match self.status {
-            DatasetAccessStatus::Open => "open".into(),
+            DatasetAccessStatus::Open => "public".into(),
             DatasetAccessStatus::Restricted => "restricted".into(),
             DatasetAccessStatus::Preview => match self.public_cutoff_date {
                 Some(date) => format!("preview from {}", date),

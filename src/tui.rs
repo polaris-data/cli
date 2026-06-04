@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, IsTerminal, Stdout};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -25,7 +26,9 @@ use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntr
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::config::Config;
 use crate::error::{Result, TickError};
-use crate::layout::{LocalDailyArtifactEntry, LocalSnapshotEntry, infer_snapshot_date_from_key};
+use crate::layout::{
+    Layout as AppLayout, LocalDailyArtifactEntry, LocalSnapshotEntry, infer_snapshot_date_from_key,
+};
 use crate::materialize::materialize_range_days;
 use crate::planner::{TimeWindow, build_sync_plan};
 use crate::syncer::{SyncProgressEvent, acquire_sync_lock, execute_sync_with_progress};
@@ -65,7 +68,7 @@ impl RemoteDatasetEntry {
             Some(DatasetAccess {
                 status: DatasetAccessStatus::Open,
                 ..
-            }) => "open: all history publicly available".into(),
+            }) => "public: all history publicly available".into(),
             Some(DatasetAccess {
                 status: DatasetAccessStatus::Restricted,
                 ..
@@ -148,6 +151,12 @@ struct DayCoverage {
     local_keys: Vec<String>,
     missing_keys: Vec<String>,
     daily_artifact_exists: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FileManagerTarget {
+    File(PathBuf),
+    Directory(PathBuf),
 }
 
 #[derive(Debug)]
@@ -525,6 +534,34 @@ impl RemoteListTui {
         self.local_summaries = summarize_local_snapshots(&local_snapshots);
         self.local_keys = group_local_snapshot_keys(local_snapshots);
         self.daily_artifacts = group_local_daily_artifacts(local_daily_artifacts);
+        Ok(())
+    }
+
+    fn reveal_selected_day_artifact(&mut self) -> Result<()> {
+        let Some(view) = self.dataset_view() else {
+            return Ok(());
+        };
+
+        let layout = AppLayout::new(self.root.clone());
+        let artifact_path =
+            layout.daily_path_for_dataset_day(&view.dataset.exchange, &view.dataset.asset, view.selected_coverage().date);
+        let daily_root = layout.daily_root();
+        match daily_artifact_reveal_target(&daily_root, &artifact_path) {
+            Some(FileManagerTarget::File(path)) => {
+                open_in_file_manager(&FileManagerTarget::File(path))?;
+                self.status_message = None;
+            }
+            Some(FileManagerTarget::Directory(path)) => {
+                open_in_file_manager(&FileManagerTarget::Directory(path))?;
+                self.status_message = None;
+            }
+            None => {
+                self.status_message = Some(format!(
+                    "artifact folder not created yet: {}",
+                    artifact_path.display()
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -1118,7 +1155,11 @@ async fn run_event_loop(
                                 app.status_message = Some(format!("error: {err}"));
                             }
                         }
-                        ViewMode::Dataset(ref mut view) => view.move_selection(1),
+                        ViewMode::Dataset(_) => {
+                            if let Err(err) = app.reveal_selected_day_artifact() {
+                                app.status_message = Some(format!("error: {err}"));
+                            }
+                        }
                         ViewMode::Splash => {}
                     },
                     KeyCode::Backspace => {
@@ -1461,7 +1502,7 @@ fn render_dataset_view(
     render_footer(
         frame,
         areas[2],
-        " Enter sync day  │  Tab next day  │  ←/→ move day  │  ↑/↓ move week  │  Esc back  │  Ctrl+C quit ",
+        " Enter sync day  │  Tab Show in Finder  │  ←/→ move day  │  ↑/↓ move week  │  Esc back  │  Ctrl+C quit ",
     );
 }
 
@@ -1615,14 +1656,7 @@ fn render_selected_day_summary(
     let day = view.selected_coverage();
     let (remote_total, local_total, missing_total, state) =
         sync_adjusted_day_totals(view, day, active_sync);
-    let remote_window = format_snapshot_window(&day.remote_keys);
-    let local_window = format_snapshot_window(&day.local_keys);
     let completion_bar = render_completion_bar(local_total, remote_total, 18);
-    let byte_progress = active_sync
-        .filter(|sync| sync.dataset == view.dataset.dataset && sync.date == day.date)
-        .map(|sync| format_byte_progress(sync.download_bytes, sync.download_total_bytes))
-        .filter(|progress| !progress.is_empty())
-        .unwrap_or_else(|| "-".to_string());
     let state_style = match state {
         "full" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
         "partial" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
@@ -1647,16 +1681,7 @@ fn render_selected_day_summary(
             "coverage: {}   missing: {}",
             completion_bar, missing_total
         )),
-        Line::from(format!("remote: {}   local: {}", remote_window, local_window)),
-        Line::from(format!(
-            "artifact: {}   bytes: {}",
-            if day.daily_artifact_exists {
-                "present"
-            } else {
-                "absent"
-            },
-            byte_progress
-        )),
+        Line::from(format_daily_artifact_location(view, day)),
     ];
     if let Some(status) = status_message {
         lines.push(Line::from(vec![
@@ -1668,6 +1693,97 @@ fn render_selected_day_summary(
     Paragraph::new(lines)
         .wrap(Wrap { trim: true })
         .block(Block::default().title("Selected Day").borders(Borders::ALL))
+}
+
+fn format_daily_artifact_location(view: &DatasetView, day: &DayCoverage) -> String {
+    let artifact_path = format!(
+        "daily/{}",
+        AppLayout::daily_relative_path_for_dataset_day(
+            &view.dataset.exchange,
+            &view.dataset.asset,
+            day.date,
+        )
+        .to_string_lossy()
+    );
+    if day.daily_artifact_exists {
+        format!("stored at: {artifact_path}")
+    } else {
+        format!("will store at: {artifact_path}")
+    }
+}
+
+fn daily_artifact_reveal_target(daily_root: &Path, artifact_path: &Path) -> Option<FileManagerTarget> {
+    if artifact_path.is_file() {
+        return Some(FileManagerTarget::File(artifact_path.to_path_buf()));
+    }
+
+    let parent = artifact_path.parent()?;
+    if parent.is_dir() {
+        return Some(FileManagerTarget::Directory(parent.to_path_buf()));
+    }
+
+    let exchange_dir = parent.parent()?;
+    if exchange_dir.is_dir() {
+        return Some(FileManagerTarget::Directory(exchange_dir.to_path_buf()));
+    }
+
+    if daily_root.is_dir() {
+        return Some(FileManagerTarget::Directory(daily_root.to_path_buf()));
+    }
+
+    None
+}
+
+fn open_in_file_manager(target: &FileManagerTarget) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = Command::new("open");
+        match target {
+            FileManagerTarget::File(path) => {
+                command.arg("-R").arg(path);
+            }
+            FileManagerTarget::Directory(path) => {
+                command.arg(path);
+            }
+        }
+        command
+            .spawn()
+            .with_context(|| "failed to launch Finder".to_string())
+            .map_err(TickError::Other)?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("explorer");
+        match target {
+            FileManagerTarget::File(path) => {
+                command.arg(format!("/select,{}", path.display()));
+            }
+            FileManagerTarget::Directory(path) => {
+                command.arg(path);
+            }
+        }
+        command
+            .spawn()
+            .with_context(|| "failed to launch Explorer".to_string())
+            .map_err(TickError::Other)?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let path = match target {
+            FileManagerTarget::File(path) => path.parent().unwrap_or(path),
+            FileManagerTarget::Directory(path) => path.as_path(),
+        };
+        Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .with_context(|| "failed to launch file manager".to_string())
+            .map_err(TickError::Other)?;
+        Ok(())
+    }
 }
 
 fn render_api_key_prompt(frame: &mut ratatui::Frame<'_>, prompt: &ApiKeyPromptState) {
@@ -1942,46 +2058,6 @@ fn render_completion_bar(local_total: usize, remote_total: usize, width: usize) 
     bar
 }
 
-fn format_snapshot_window(keys: &[String]) -> String {
-    let mut starts = Vec::new();
-    let mut ends = Vec::new();
-    for key in keys {
-        if let Some((start, end)) = parse_snapshot_times_from_key(key) {
-            starts.push(start);
-            ends.push(end);
-        }
-    }
-    starts.sort();
-    ends.sort();
-
-    match (starts.first(), ends.last()) {
-        (Some(start), Some(end)) => {
-            format!("{} -> {}", start.format("%H:%M:%S"), end.format("%H:%M:%S"))
-        }
-        _ => "-".to_string(),
-    }
-}
-
-fn parse_snapshot_times_from_key(key: &str) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-    let filename = key.rsplit('/').next()?;
-    let start = filename
-        .split("_s")
-        .nth(1)
-        .and_then(|value| value.split("_e").next())
-        .and_then(parse_snapshot_timestamp)?;
-    let end = filename
-        .split("_e")
-        .nth(1)
-        .and_then(|value| value.split('.').next())
-        .and_then(parse_snapshot_timestamp)?;
-    Some((start, end))
-}
-
-fn parse_snapshot_timestamp(raw: &str) -> Option<DateTime<Utc>> {
-    let naive = chrono::NaiveDateTime::parse_from_str(raw, "%Y%m%dT%H%M%SZ").ok()?;
-    Some(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
-}
-
 fn centered_rect(width_percentage: u16, height: u16, area: Rect) -> Rect {
     let vertical = Layout::default()
         .direction(Direction::Vertical)
@@ -2109,9 +2185,10 @@ mod tests {
 
     use super::{
         ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView, DaySyncUpdate,
-        RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed, SyncPhase,
+        FileManagerTarget, RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed, SyncPhase,
         api_key_requirement_for_download, build_day_coverages, diff_missing_snapshot_keys,
-        load_bookmarks, save_bookmarks,
+        daily_artifact_reveal_target, format_daily_artifact_location, load_bookmarks,
+        save_bookmarks,
     };
     use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
     use crate::layout::LocalSnapshotEntry;
@@ -2528,6 +2605,80 @@ mod tests {
         assert_eq!(days[1].missing_keys.len(), 0);
         assert_eq!(days[2].missing_keys.len(), 1);
         assert_eq!(days[3].remote_keys.len(), 0);
+    }
+
+    #[test]
+    fn selected_day_summary_reports_daily_artifact_location() {
+        let dataset = RemoteDatasetEntry {
+            exchange: "aster".into(),
+            asset: "BTCUSDT".into(),
+            start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+            end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+            source: Some("manifest".into()),
+            access: Some(DatasetAccess {
+                status: DatasetAccessStatus::Open,
+                public_cutoff_date: None,
+            }),
+            categories: Vec::new(),
+            dataset: "aster:BTCUSDT".into(),
+        };
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let mut days = build_day_coverages(
+            Vec::new(),
+            &[],
+            date,
+            date,
+            &dataset.dataset,
+            &BTreeSet::new(),
+        );
+        let view = DatasetView {
+            dataset: dataset.clone(),
+            days: days.clone(),
+            selected_day: 0,
+        };
+        assert_eq!(
+            format_daily_artifact_location(&view, &view.days[0]),
+            "will store at: daily/aster/BTCUSDT/2026-06-01.jsonl.zst"
+        );
+
+        days[0].daily_artifact_exists = true;
+        let view = DatasetView {
+            dataset,
+            days,
+            selected_day: 0,
+        };
+        assert_eq!(
+            format_daily_artifact_location(&view, &view.days[0]),
+            "stored at: daily/aster/BTCUSDT/2026-06-01.jsonl.zst"
+        );
+    }
+
+    #[test]
+    fn reveal_target_prefers_exact_artifact_file() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let daily_root = tempdir.path().join("daily");
+        let artifact_path = daily_root.join("aster/BTCUSDT/2026-06-01.jsonl.zst");
+        std::fs::create_dir_all(artifact_path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&artifact_path, b"snapshot").expect("write");
+
+        assert_eq!(
+            daily_artifact_reveal_target(&daily_root, &artifact_path),
+            Some(FileManagerTarget::File(artifact_path))
+        );
+    }
+
+    #[test]
+    fn reveal_target_falls_back_to_daily_directory_when_artifact_is_missing() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let daily_root = tempdir.path().join("daily");
+        let artifact_path = daily_root.join("aster/BTCUSDT/2026-06-01.jsonl.zst");
+        let asset_dir = daily_root.join("aster/BTCUSDT");
+        std::fs::create_dir_all(&asset_dir).expect("mkdir");
+
+        assert_eq!(
+            daily_artifact_reveal_target(&daily_root, &artifact_path),
+            Some(FileManagerTarget::Directory(asset_dir))
+        );
     }
 
     #[tokio::test]
