@@ -80,6 +80,16 @@ impl Layout {
         self.root.join("daily")
     }
 
+    pub fn daily_relative_path_for_dataset_day(
+        exchange: &str,
+        asset: &str,
+        date: NaiveDate,
+    ) -> PathBuf {
+        PathBuf::from(exchange)
+            .join(asset)
+            .join(format!("{date}.jsonl.zst"))
+    }
+
     pub fn tmp_root(&self) -> PathBuf {
         self.root.join("tmp")
     }
@@ -91,9 +101,7 @@ impl Layout {
         date: NaiveDate,
     ) -> PathBuf {
         self.daily_root()
-            .join(exchange)
-            .join(asset)
-            .join(format!("{date}.jsonl.zst"))
+            .join(Self::daily_relative_path_for_dataset_day(exchange, asset, date))
     }
 
     pub fn daily_temp_path_for_dataset_day(
@@ -444,6 +452,18 @@ mod tests {
                 asset: "BTCUSDT".into(),
                 date: "2026-06-01".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn daily_relative_path_matches_managed_storage_shape() {
+        assert_eq!(
+            Layout::daily_relative_path_for_dataset_day(
+                "aster",
+                "BTCUSDT",
+                chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+            ),
+            PathBuf::from("aster/BTCUSDT/2026-06-01.jsonl.zst")
         );
     }
 
