@@ -25,7 +25,7 @@ use crate::syncer::{SyncExecution, acquire_sync_lock, execute_sync, layout_for_r
 use crate::tui::{RemoteDatasetEntry, RemoteTuiSeed, can_render_tui, run_remote_list_tui};
 
 const UPDATE_INSTALLER_URL: &str =
-    "https://raw.githubusercontent.com/spectrum-ec/tick/main/install.sh";
+    "https://raw.githubusercontent.com/polaris-data/cli/main/install.sh";
 
 pub async fn main_entry() -> ExitCode {
     init_tracing();
