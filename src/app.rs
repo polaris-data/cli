@@ -19,7 +19,6 @@ use crate::cli::{
 use crate::config::{ApiKeySource, Config};
 use crate::error::{Result, TickError};
 use crate::layout::{Layout, LocalSnapshotEntry};
-use crate::materialize::{MaterializeExecution, materialize_range_days};
 use crate::planner::{SyncPlan, TimeWindow, build_sync_plan};
 use crate::syncer::{SyncExecution, acquire_sync_lock, execute_sync, layout_for_root};
 use crate::tui::{RemoteDatasetEntry, RemoteTuiSeed, can_render_tui, run_remote_list_tui};
@@ -322,13 +321,10 @@ async fn run_list_remote(
         emit_output(args.json, &output)?;
     } else {
         let local_snapshots = Layout::new(config.root.clone()).list_local_snapshots()?;
-        let local_daily_artifacts =
-            Layout::new(config.root.clone()).list_local_daily_artifacts()?;
         run_remote_list_tui(
             client.clone(),
             entries,
             local_snapshots,
-            local_daily_artifacts,
             config.root.clone(),
             config.concurrency,
             RemoteTuiSeed {
@@ -358,11 +354,8 @@ async fn run_reset(config: &Config, args: ResetArgs) -> Result<u8> {
     let _guard = acquire_sync_lock(&layout)?;
 
     let snapshot_total = layout.list_local_snapshots()?.len();
-    let daily_artifact_total = layout.list_local_daily_artifacts()?.len();
-
     let candidate_roots = vec![
         layout.data_root(),
-        layout.daily_root(),
         layout.tmp_root(),
         layout.cache_root(),
     ];
@@ -382,7 +375,6 @@ async fn run_reset(config: &Config, args: ResetArgs) -> Result<u8> {
         command: "reset",
         root: layout.root().display().to_string(),
         snapshot_total,
-        daily_artifact_total,
         removed_roots,
     };
     emit_output(args.json, &output)?;
@@ -411,16 +403,7 @@ async fn run_sync(config: &Config, client: &PolarisClient, args: SyncArgs) -> Re
     }
 
     let execution = execute_sync(client, &plan, concurrency).await;
-    let materialization = materialize_range_days(
-        client,
-        &layout,
-        &plan.exchange,
-        &plan.asset,
-        plan.effective_range.from.date_naive(),
-        plan.effective_range.to.date_naive(),
-    )
-    .await?;
-    let output = SyncOutput::from_parts(&plan, execution, materialization);
+    let output = SyncOutput::from_parts(&plan, execution);
     let exit_code = if output.failed_total > 0 { 1 } else { 0 };
     emit_output(args.dataset.json, &output)?;
     Ok(exit_code)
@@ -692,8 +675,6 @@ struct SyncOutput {
     downloaded_total: usize,
     skipped_total: usize,
     failed_total: usize,
-    materialized_days_total: usize,
-    materialization_incomplete_days_total: usize,
     downloaded_keys: Vec<String>,
     failed: Vec<crate::syncer::FailedDownload>,
 }
@@ -703,16 +684,11 @@ struct ResetOutput {
     command: &'static str,
     root: String,
     snapshot_total: usize,
-    daily_artifact_total: usize,
     removed_roots: Vec<String>,
 }
 
 impl SyncOutput {
-    fn from_parts(
-        plan: &SyncPlan,
-        execution: SyncExecution,
-        materialization: MaterializeExecution,
-    ) -> Self {
+    fn from_parts(plan: &SyncPlan, execution: SyncExecution) -> Self {
         Self {
             command: "sync",
             exchange: plan.exchange.clone(),
@@ -724,8 +700,6 @@ impl SyncOutput {
             downloaded_total: execution.downloaded_total(),
             skipped_total: plan.present_total(),
             failed_total: execution.failed_total(),
-            materialized_days_total: materialization.built_total,
-            materialization_incomplete_days_total: materialization.incomplete_total,
             downloaded_keys: execution.downloaded_keys,
             failed: execution.failed,
         }
@@ -749,11 +723,6 @@ impl HumanOutput for SyncOutput {
             format!("downloaded: {}", self.downloaded_total),
             format!("skipped: {}", self.skipped_total),
             format!("failed: {}", self.failed_total),
-            format!("materialized days: {}", self.materialized_days_total),
-            format!(
-                "incomplete days: {}",
-                self.materialization_incomplete_days_total
-            ),
         ];
         if !self.failed.is_empty() {
             lines.push("failed keys:".into());
@@ -771,7 +740,6 @@ impl HumanOutput for ResetOutput {
             "reset".to_string(),
             format!("root: {}", self.root),
             format!("removed snapshots: {}", self.snapshot_total),
-            format!("removed daily artifacts: {}", self.daily_artifact_total),
         ];
         if !self.removed_roots.is_empty() {
             lines.push("removed roots:".into());
@@ -1029,8 +997,6 @@ mod tests {
             downloaded_total: 1,
             skipped_total: 1,
             failed_total: 1,
-            materialized_days_total: 1,
-            materialization_incomplete_days_total: 1,
             downloaded_keys: vec!["k".into()],
             failed: vec![FailedDownload {
                 key: "x".into(),
@@ -1040,7 +1006,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"sync\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/polaris\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"materialized_days_total\":1,\"materialization_incomplete_days_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
+            "{\"command\":\"sync\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/polaris\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
         );
     }
 
@@ -1050,10 +1016,8 @@ mod tests {
             command: "reset",
             root: "/tmp/polaris".into(),
             snapshot_total: 2,
-            daily_artifact_total: 1,
             removed_roots: vec![
                 "/tmp/polaris/data".into(),
-                "/tmp/polaris/daily".into(),
                 "/tmp/polaris/tmp".into(),
                 "/tmp/polaris/cache".into(),
             ],
@@ -1061,7 +1025,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"reset\",\"root\":\"/tmp/polaris\",\"snapshot_total\":2,\"daily_artifact_total\":1,\"removed_roots\":[\"/tmp/polaris/data\",\"/tmp/polaris/daily\",\"/tmp/polaris/tmp\",\"/tmp/polaris/cache\"]}"
+            "{\"command\":\"reset\",\"root\":\"/tmp/polaris\",\"snapshot_total\":2,\"removed_roots\":[\"/tmp/polaris/data\",\"/tmp/polaris/tmp\",\"/tmp/polaris/cache\"]}"
         );
     }
 
@@ -1085,14 +1049,6 @@ mod tests {
         std::fs::create_dir_all(snapshot_path.parent().expect("parent")).expect("mkdir");
         std::fs::write(&snapshot_path, b"snapshot").expect("write snapshot");
 
-        let daily_path = layout.daily_path_for_dataset_day(
-            "aster",
-            "BTCUSDT",
-            chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
-        );
-        std::fs::create_dir_all(daily_path.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&daily_path, b"daily").expect("write daily");
-
         let tmp_path =
             layout.temp_path_for_key("events/aster/BTCUSDT/aster_BTCUSDT_2026-06-01.jsonl.zst");
         std::fs::create_dir_all(tmp_path.parent().expect("parent")).expect("mkdir");
@@ -1108,22 +1064,13 @@ mod tests {
         assert_eq!(exit_code, 0);
 
         assert!(!layout.data_root().exists());
-        assert!(!layout.daily_root().exists());
         assert!(!layout.tmp_root().exists());
         assert!(!layout.cache_root().exists());
         assert!(layout.root().exists());
         assert_eq!(layout.list_local_snapshots().expect("snapshots").len(), 0);
-        assert_eq!(
-            layout
-                .list_local_daily_artifacts()
-                .expect("daily artifacts")
-                .len(),
-            0
-        );
 
         let remaining_roots = [
             layout.data_root(),
-            layout.daily_root(),
             layout.tmp_root(),
             layout.cache_root(),
         ]

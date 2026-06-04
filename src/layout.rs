@@ -24,14 +24,6 @@ pub struct LocalSnapshotEntry {
     pub end: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct LocalDailyArtifactEntry {
-    pub path: String,
-    pub exchange: String,
-    pub asset: String,
-    pub date: String,
-}
-
 impl Layout {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
@@ -76,48 +68,8 @@ impl Layout {
         self.root.join("data")
     }
 
-    pub fn daily_root(&self) -> PathBuf {
-        self.root.join("daily")
-    }
-
-    pub fn daily_relative_path_for_dataset_day(
-        exchange: &str,
-        asset: &str,
-        date: NaiveDate,
-    ) -> PathBuf {
-        PathBuf::from(exchange)
-            .join(asset)
-            .join(format!("{date}.jsonl.zst"))
-    }
-
     pub fn tmp_root(&self) -> PathBuf {
         self.root.join("tmp")
-    }
-
-    pub fn daily_path_for_dataset_day(
-        &self,
-        exchange: &str,
-        asset: &str,
-        date: NaiveDate,
-    ) -> PathBuf {
-        self.daily_root()
-            .join(Self::daily_relative_path_for_dataset_day(exchange, asset, date))
-    }
-
-    pub fn daily_temp_path_for_dataset_day(
-        &self,
-        exchange: &str,
-        asset: &str,
-        date: NaiveDate,
-    ) -> PathBuf {
-        let mut hasher = Sha256::new();
-        hasher.update(exchange.as_bytes());
-        hasher.update(b":");
-        hasher.update(asset.as_bytes());
-        hasher.update(b":");
-        hasher.update(date.to_string().as_bytes());
-        let digest = format!("{:x}", hasher.finalize());
-        self.tmp_root().join(format!("daily-{digest}.part"))
     }
 
     pub fn list_local_snapshots(&self) -> Result<Vec<LocalSnapshotEntry>> {
@@ -129,23 +81,6 @@ impl Layout {
 
         collect_snapshot_files(&data_root, &data_root, &mut files)?;
         files.sort_by(|left, right| left.key.cmp(&right.key));
-        Ok(files)
-    }
-
-    pub fn list_local_daily_artifacts(&self) -> Result<Vec<LocalDailyArtifactEntry>> {
-        let daily_root = self.daily_root();
-        let mut files = Vec::new();
-        if !daily_root.exists() {
-            return Ok(files);
-        }
-
-        collect_daily_artifacts(&daily_root, &daily_root, &mut files)?;
-        files.sort_by(|left, right| {
-            left.exchange
-                .cmp(&right.exchange)
-                .then(left.asset.cmp(&right.asset))
-                .then(left.date.cmp(&right.date))
-        });
         Ok(files)
     }
 }
@@ -229,69 +164,13 @@ fn collect_snapshot_files(
     Ok(())
 }
 
-pub fn infer_snapshot_date_from_key(key: &str) -> Option<NaiveDate> {
+pub fn infer_snapshot_date_from_key(key: &str) -> Option<chrono::NaiveDate> {
     let segments = key.split('/').collect::<Vec<_>>();
     infer_date_from_segments(&segments).or_else(|| {
         segments
             .last()
             .and_then(|filename| infer_date_from_text(filename))
     })
-}
-
-fn collect_daily_artifacts(
-    root: &Path,
-    current: &Path,
-    files: &mut Vec<LocalDailyArtifactEntry>,
-) -> Result<()> {
-    for entry in std::fs::read_dir(current).map_err(|err| {
-        TickError::Other(anyhow!(err).context(format!("failed to read {}", current.display())))
-    })? {
-        let entry = entry.map_err(|err| {
-            TickError::Other(
-                anyhow!(err).context(format!("failed to read entry in {}", current.display())),
-            )
-        })?;
-        let path = entry.path();
-        let file_type = entry.file_type().map_err(|err| {
-            TickError::Other(anyhow!(err).context(format!("failed to stat {}", path.display())))
-        })?;
-
-        if file_type.is_dir() {
-            collect_daily_artifacts(root, &path, files)?;
-            continue;
-        }
-
-        if !file_type.is_file() {
-            continue;
-        }
-
-        let relative = match path.strip_prefix(root) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        let segments = relative
-            .to_string_lossy()
-            .replace('\\', "/")
-            .split('/')
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        if segments.len() != 3 {
-            continue;
-        }
-
-        let Some(date) = segments[2].strip_suffix(".jsonl.zst") else {
-            continue;
-        };
-
-        files.push(LocalDailyArtifactEntry {
-            path: path.to_string_lossy().to_string(),
-            exchange: segments[0].clone(),
-            asset: segments[1].clone(),
-            date: date.to_string(),
-        });
-    }
-
-    Ok(())
 }
 
 fn parse_snapshot_times(filename: &str) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
@@ -389,7 +268,7 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
 
-    use super::{Layout, LocalDailyArtifactEntry, infer_snapshot_date_from_key};
+    use super::{Layout, infer_snapshot_date_from_key};
 
     #[test]
     fn remote_key_maps_to_canonical_path() {
@@ -428,42 +307,6 @@ mod tests {
         assert_eq!(
             entry.end,
             Some(Utc.with_ymd_and_hms(2026, 6, 1, 0, 9, 59).unwrap())
-        );
-    }
-
-    #[test]
-    fn local_daily_listing_detects_materialized_day_files() {
-        let tempdir = tempfile::TempDir::new().expect("tempdir");
-        let layout = Layout::new(tempdir.path().to_path_buf());
-        let file = layout.daily_path_for_dataset_day(
-            "aster",
-            "BTCUSDT",
-            chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
-        );
-        std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&file, b"snapshot").expect("write");
-
-        let entries = layout.list_local_daily_artifacts().expect("entries");
-        assert_eq!(
-            entries,
-            vec![LocalDailyArtifactEntry {
-                path: file.to_string_lossy().to_string(),
-                exchange: "aster".into(),
-                asset: "BTCUSDT".into(),
-                date: "2026-06-01".into(),
-            }]
-        );
-    }
-
-    #[test]
-    fn daily_relative_path_matches_managed_storage_shape() {
-        assert_eq!(
-            Layout::daily_relative_path_for_dataset_day(
-                "aster",
-                "BTCUSDT",
-                chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
-            ),
-            PathBuf::from("aster/BTCUSDT/2026-06-01.jsonl.zst")
         );
     }
 

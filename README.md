@@ -119,7 +119,7 @@ polaris sync \
 polaris list local --exchange aster --asset BTCUSDT
 ```
 
-After sync completes, Polaris stores the fetched snapshot files under its managed local root and automatically materializes full-day files for UTC days that are fully present locally.
+After sync completes, Polaris stores the fetched snapshot files under its managed local root.
 
 ## Common Workflows
 
@@ -164,7 +164,7 @@ polaris reset
 polaris reset --json
 ```
 
-`reset` removes the local dataset state managed by Polaris under the configured root. It clears `data/`, `daily/`, `tmp/`, and `cache/`, but leaves the root directory and account credentials intact.
+`reset` removes the local dataset state managed by Polaris under the configured root. It clears `data/`, `tmp/`, and `cache/`, but leaves the root directory and account credentials intact.
 
 ## CLI Overview
 
@@ -252,8 +252,6 @@ polaris list local --json
 ### `polaris sync`
 
 Downloads missing snapshots for the requested dataset and time range.
-
-After sync completes, Polaris also automatically materializes full-day local files under `daily/` for any UTC day in the effective sync range that is fully present locally. When Polaris serves a day-level standardized snapshot directly, that file is reused as the day artifact.
 
 ```bash
 polaris sync \
@@ -359,13 +357,11 @@ Within that root, Polaris owns this layout:
 ```text
 <root>/
   data/
-  daily/
   tmp/
   cache/
 ```
 
 - `data/` stores snapshot files fetched from Polaris
-- `daily/` stores full-day artifacts materialized from complete UTC-day coverage
 - `tmp/` stores temporary sync state
 - `cache/` stores local cache state used by the CLI
 
