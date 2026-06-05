@@ -2,6 +2,8 @@
 
 Access and manage high-fidelity market data from Hyperliquid, Lighter, and more.
 
+![Polaris splash screen](assets/polaris-splash-screen.png)
+
 [Installation](#installation) | [Quick Start](#quick-start) | [Common Workflows](#common-workflows) | [CLI Overview](#cli-overview) | [Command Reference](#command-reference) | [Configuration](#configuration)
 
 ## Why Polaris
@@ -11,6 +13,8 @@ Access and manage high-fidelity market data from Hyperliquid, Lighter, and more.
 - Materialize full UTC-day local files automatically when a day is fully present
 - Inspect the local dataset tree managed by Polaris
 - Automate data workflows with plain CLI output or `--json`
+
+![Polaris product screenshot](assets/polaris-product-screen.png)
 
 ## Requirements
 

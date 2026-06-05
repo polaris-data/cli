@@ -1165,7 +1165,7 @@ fn render_splash(frame: &mut ratatui::Frame<'_>, spinner_tick: usize) {
             )]),
             Line::from(""),
             Line::from(vec![Span::styled(
-                "A fixed point for orderly market data sync.",
+                "High-fidelity market data from Hyperliquid, Lighter, and more.",
                 Style::default().fg(Color::White),
             )]),
             Line::from(vec![Span::styled(
