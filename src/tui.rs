@@ -2123,11 +2123,17 @@ fn api_key_requirement_for_download(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::time::Duration;
 
+    use axum::extract::{Query, State};
+    use axum::routing::get;
+    use axum::{Json, Router};
     use chrono::NaiveDate;
     use chrono::{TimeZone, Utc};
+    use serde::{Deserialize, Serialize};
+    use tokio::net::TcpListener;
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::{
@@ -2138,6 +2144,77 @@ mod tests {
     };
     use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
     use crate::layout::LocalSnapshotEntry;
+
+    #[derive(Clone)]
+    struct SnapshotListTestServerState {
+        exchange: String,
+        asset: String,
+        snapshots: Vec<SnapshotEntry>,
+        total_bytes: u64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct SnapshotListQuery {
+        exchange: String,
+        asset: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct SnapshotListResponse {
+        total: usize,
+        total_bytes: u64,
+        next_cursor: Option<String>,
+        snapshots: Vec<SnapshotEntry>,
+    }
+
+    struct SnapshotListTestServer {
+        addr: SocketAddr,
+    }
+
+    impl SnapshotListTestServer {
+        async fn spawn(
+            exchange: String,
+            asset: String,
+            snapshots: Vec<SnapshotEntry>,
+            total_bytes: u64,
+        ) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            let app = Router::new()
+                .route("/snapshots", get(handle_test_snapshots))
+                .with_state(SnapshotListTestServerState {
+                    exchange,
+                    asset,
+                    snapshots,
+                    total_bytes,
+                });
+
+            tokio::spawn(async move {
+                axum::serve(listener, app).await.expect("server");
+            });
+
+            Self { addr }
+        }
+
+        fn base_url(&self) -> String {
+            format!("http://{}", self.addr)
+        }
+    }
+
+    async fn handle_test_snapshots(
+        State(state): State<SnapshotListTestServerState>,
+        Query(query): Query<SnapshotListQuery>,
+    ) -> Json<SnapshotListResponse> {
+        assert_eq!(query.exchange, state.exchange);
+        assert_eq!(query.asset, state.asset);
+
+        Json(SnapshotListResponse {
+            total: state.snapshots.len(),
+            total_bytes: state.total_bytes,
+            next_cursor: None,
+            snapshots: state.snapshots,
+        })
+    }
 
     #[test]
     fn search_filters_remote_datasets() {
@@ -2633,6 +2710,10 @@ mod tests {
     #[tokio::test]
     async fn sync_updates_do_not_skip_progress_frames() {
         let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let remote_snapshot = SnapshotEntry {
+            key: "snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst".into(),
+            filename: "aster_ASTERUSDT_2026-06-01_standard.jsonl.zst".into(),
+        };
         let dataset = RemoteDatasetEntry {
             exchange: "aster".into(),
             asset: "ASTERUSDT".into(),
@@ -2657,10 +2738,7 @@ mod tests {
         app.mode = super::ViewMode::Dataset(DatasetView {
             dataset: dataset.clone(),
             days: build_day_coverages(
-                vec![SnapshotEntry {
-                    key: "snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst".into(),
-                    filename: "aster_ASTERUSDT_2026-06-01_standard.jsonl.zst".into(),
-                }],
+                vec![remote_snapshot.clone()],
                 &[],
                 date,
                 date,
@@ -2697,12 +2775,15 @@ mod tests {
             deferred_update: None,
             receiver: rx,
         });
-        let client = PolarisClient::new(
-            "https://api.polaris.supply".into(),
-            None,
-            Duration::from_secs(1),
+        let server = SnapshotListTestServer::spawn(
+            dataset.exchange.clone(),
+            dataset.asset.clone(),
+            vec![remote_snapshot],
+            2048,
         )
-        .expect("client");
+        .await;
+        let client =
+            PolarisClient::new(server.base_url(), None, Duration::from_secs(1)).expect("client");
 
         app.pump_sync_updates(&client).await.expect("first pump");
         let sync = app.active_sync.as_ref().expect("sync still active");
