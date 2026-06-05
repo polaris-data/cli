@@ -26,7 +26,9 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       create_tag: ${{ steps.plan.outputs.create_tag }}
+      release_sha: ${{ steps.plan.outputs.release_sha }}
       should_release: ${{ steps.plan.outputs.should_release }}
+      source_ref: ${{ steps.plan.outputs.source_ref }}
       tag: ${{ steps.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +47,8 @@ jobs:
 
           should_release="false"
           create_tag="false"
+          release_sha="${GITHUB_SHA}"
+          source_ref="${GITHUB_SHA}"
           tag=""
 
           if [[ "${event_name}" == "workflow_dispatch" ]]; then
@@ -53,6 +57,7 @@ jobs:
           elif [[ "${ref_type}" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
             should_release="true"
+            source_ref="${tag}"
           else
             current_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
             previous_version=""
@@ -91,7 +96,10 @@ jobs:
             if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
               existing_sha="$(git rev-list -n1 "${tag}")"
 
-              if [[ "${existing_sha}" != "${GITHUB_SHA}" ]]; then
+              if [[ "${event_name}" == "workflow_dispatch" ]]; then
+                release_sha="${existing_sha}"
+                source_ref="${tag}"
+              elif [[ "${existing_sha}" != "${GITHUB_SHA}" ]]; then
                 echo "Tag ${tag} already exists at ${existing_sha}, not ${GITHUB_SHA}." >&2
                 exit 1
               fi
@@ -101,32 +109,10 @@ jobs:
           fi
 
           echo "create_tag=${create_tag}" >>"${GITHUB_OUTPUT}"
+          echo "release_sha=${release_sha}" >>"${GITHUB_OUTPUT}"
           echo "should_release=${should_release}" >>"${GITHUB_OUTPUT}"
+          echo "source_ref=${source_ref}" >>"${GITHUB_OUTPUT}"
           echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
-
-      - name: Create release tag
-        if: steps.plan.outputs.create_tag == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          payload="$(mktemp)"
-          trap 'rm -f "${payload}"' EXIT
-
-          cat >"${payload}" <<EOF
-          {
-            "ref": "refs/tags/${{ steps.plan.outputs.tag }}",
-            "sha": "${{ github.sha }}"
-          }
-          EOF
-
-          curl --fail-with-body -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/git/refs" \
-            --data @"${payload}"
 
   validate:
     needs: prepare
@@ -138,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Validate Cargo version matches tag
         id: meta
@@ -188,7 +174,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.validate.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -237,6 +223,30 @@ jobs:
           path: dist
           pattern: release-*
           merge-multiple: true
+
+      - name: Create release tag
+        if: needs.prepare.outputs.create_tag == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          payload="$(mktemp)"
+          trap 'rm -f "${payload}"' EXIT
+
+          cat >"${payload}" <<EOF
+          {
+            "ref": "refs/tags/${{ needs.validate.outputs.tag }}",
+            "sha": "${{ needs.prepare.outputs.release_sha }}"
+          }
+          EOF
+
+          curl --fail-with-body -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/git/refs" \
+            --data @"${payload}"
 
       - name: Generate checksums
         shell: bash
