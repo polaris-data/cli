@@ -1326,7 +1326,8 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
         .split(frame.area());
 
     let version_title = Title {
-        content: Line::from("Polaris v0.1.0").alignment(Alignment::Right),
+        content: Line::from(concat!("Polaris v", env!("CARGO_PKG_VERSION")))
+            .alignment(Alignment::Right),
         alignment: Some(Alignment::Right),
         position: None,
     };
