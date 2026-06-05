@@ -50,7 +50,7 @@ polaris update
 Install a pinned version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --version v0.2.0
+curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --version v0.2.1
 ```
 
 Install into a custom directory:
@@ -302,7 +302,7 @@ By default, `polaris update` tries to preserve the current install directory whe
 
 ```bash
 polaris update
-polaris update --version v0.2.0
+polaris update --version v0.2.1
 polaris update --install-dir "$HOME/.local/bin"
 ```
 
