@@ -332,6 +332,7 @@ async fn run_list_remote(
                 asset: args.asset.clone(),
                 search: args.search.clone(),
             },
+            config,
         )
         .await?;
     }
@@ -354,11 +355,7 @@ async fn run_reset(config: &Config, args: ResetArgs) -> Result<u8> {
     let _guard = acquire_sync_lock(&layout)?;
 
     let snapshot_total = layout.list_local_snapshots()?.len();
-    let candidate_roots = vec![
-        layout.data_root(),
-        layout.tmp_root(),
-        layout.cache_root(),
-    ];
+    let candidate_roots = vec![layout.data_root(), layout.tmp_root(), layout.cache_root()];
 
     let mut removed_roots = Vec::new();
     for root in candidate_roots {
@@ -1069,14 +1066,10 @@ mod tests {
         assert!(layout.root().exists());
         assert_eq!(layout.list_local_snapshots().expect("snapshots").len(), 0);
 
-        let remaining_roots = [
-            layout.data_root(),
-            layout.tmp_root(),
-            layout.cache_root(),
-        ]
-        .into_iter()
-        .filter(|path| path.exists())
-        .collect::<BTreeSet<_>>();
+        let remaining_roots = [layout.data_root(), layout.tmp_root(), layout.cache_root()]
+            .into_iter()
+            .filter(|path| path.exists())
+            .collect::<BTreeSet<_>>();
         assert!(remaining_roots.is_empty());
     }
 }

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{Datelike, Duration as ChronoDuration};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -13,11 +13,18 @@ use super::app::RemoteListTui;
 use super::coverage::{
     access_color, compact_count, render_completion_bar, spinner_frame, sync_adjusted_day_totals,
 };
-use super::model::{ActiveDaySync, ApiKeyPromptState, DatasetView, DayCoverage, DayState, ViewMode};
+use super::model::{
+    AccountView, ActiveDaySync, ApiKeyPromptState, DatasetView, DayCoverage, DayState, ViewMode,
+};
 
 pub(crate) fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
-    match app.dataset_view() {
-        Some(view) => render_dataset_view(
+    match &app.mode {
+        ViewMode::Splash => render_splash(frame, app.spinner_tick),
+        ViewMode::Browser => render_browser(frame, app),
+        ViewMode::Account => {
+            render_account_view(frame, &app.account_view, app.status_message.as_deref())
+        }
+        ViewMode::Dataset(view) => render_dataset_view(
             frame,
             view,
             app.is_bookmarked(view.dataset.dataset.as_str()),
@@ -25,11 +32,6 @@ pub(crate) fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
             app.active_sync.as_ref(),
             app.spinner_tick,
         ),
-        None => match app.mode {
-            ViewMode::Splash => render_splash(frame, app.spinner_tick),
-            ViewMode::Browser => render_browser(frame, app),
-            _ => unreachable!(),
-        },
     }
 
     if let Some(prompt) = &app.api_key_prompt {
@@ -266,8 +268,105 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     render_footer(
         frame,
         areas[2],
-        " Type to search  │  ←/→ category  │  ↑/↓ navigate  │  Tab bookmark  │  Enter inspect dataset  │  Ctrl+C quit ",
+        " Type to search  │  . account  │  ←/→ category  │  ↑/↓ navigate  │  Tab bookmark  │  Enter inspect dataset  │  Ctrl+C quit ",
     );
+}
+
+fn render_account_view(
+    frame: &mut ratatui::Frame<'_>,
+    account: &AccountView,
+    status_message: Option<&str>,
+) {
+    let area = centered_rect(90, 18, frame.area());
+
+    let status_style = if account.api_key_present {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    };
+    let status_label = if account.api_key_present {
+        "configured"
+    } else {
+        "not configured"
+    };
+    let intro = if account.api_key_present {
+        "API key is ready for restricted and preview history."
+    } else {
+        "Sign in on polaris.supply to add an API key."
+    };
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Polaris account",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(intro),
+        Line::from(""),
+        account_row("source", account.data_source),
+        account_row("login", account.login_url),
+        account_row("api key", &account.api_key_source_label),
+        account_row("base", &account.base_url),
+        account_row("root", &format_account_root(&account.root)),
+        account_row("workers", &account.concurrency.to_string()),
+        account_row("timeout", &format!("{}s", account.timeout_secs)),
+    ];
+    if let Some(status) = status_message {
+        lines.push(account_row("status", status));
+    }
+
+    let status_title = Title {
+        content: Line::from(Span::styled(status_label, status_style)).alignment(Alignment::Right),
+        alignment: Some(Alignment::Right),
+        position: None,
+    };
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .title("Account")
+                .title(status_title)
+                .borders(Borders::ALL),
+        ),
+        area,
+    );
+
+    let footer_area = Rect {
+        x: frame.area().x,
+        y: frame.area().bottom().saturating_sub(1),
+        width: frame.area().width,
+        height: 1,
+    };
+    render_footer(frame, footer_area, " Esc back  │  Ctrl+C quit ");
+}
+
+fn account_row(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<7}"), Style::default().fg(Color::DarkGray)),
+        Span::raw(value.to_string()),
+    ])
+}
+
+fn format_account_root(root: &Path) -> String {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .and_then(|home| {
+            root.strip_prefix(&home).ok().map(|relative| {
+                if relative.as_os_str().is_empty() {
+                    "~".to_string()
+                } else {
+                    format!("~/{}", relative.display())
+                }
+            })
+        })
+        .unwrap_or_else(|| root.display().to_string())
 }
 
 fn category_carousel_title(app: &RemoteListTui) -> Title<'static> {
@@ -382,8 +481,8 @@ fn render_day_grid(
             .expect("month section requires at least one day");
         let grid_start =
             month_first - ChronoDuration::days(month_first.weekday().num_days_from_monday() as i64);
-        let grid_end =
-            month_last + ChronoDuration::days((6 - month_last.weekday().num_days_from_monday()) as i64);
+        let grid_end = month_last
+            + ChronoDuration::days((6 - month_last.weekday().num_days_from_monday()) as i64);
 
         let mut cursor = grid_start;
         while cursor <= grid_end {
@@ -492,11 +591,19 @@ fn render_selected_day_summary(
         sync_adjusted_day_totals(view, day, active_sync);
     let completion_bar = render_completion_bar(local_total, remote_total, 18);
     let state_style = match state {
-        "full" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-        "partial" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        "full" => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        "partial" => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
         "none local" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        "no remote data" => Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-        "syncing" => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        "no remote data" => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+        "syncing" => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
         _ => Style::default().add_modifier(Modifier::BOLD),
     };
 

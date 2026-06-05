@@ -7,7 +7,7 @@ use tokio::sync::mpsc::{error::TryRecvError, unbounded_channel};
 
 use crate::api::PolarisClient;
 use crate::auth::{CredentialStore, KeychainCredentialStore};
-use crate::config::Config;
+use crate::config::{ApiKeySource, Config};
 use crate::error::Result;
 use crate::layout::{Layout as AppLayout, LocalSnapshotEntry};
 use crate::planner::{TimeWindow, build_sync_plan};
@@ -15,17 +15,21 @@ use crate::syncer::{acquire_sync_lock, execute_sync_with_progress};
 
 use super::coverage::{
     api_key_requirement_for_download, browser_categories, build_day_coverages,
-    format_byte_progress, group_local_snapshot_keys, select_initial_day,
-    summarize_local_snapshots,
+    format_byte_progress, group_local_snapshot_keys, select_initial_day, summarize_local_snapshots,
 };
 use super::model::{
-    ActiveDaySync, ApiKeyPromptState, ApiKeyRequirement, BrowserCategory, DatasetView,
+    AccountView, ActiveDaySync, ApiKeyPromptState, ApiKeyRequirement, BrowserCategory, DatasetView,
     DaySyncUpdate, FileManagerTarget, LocalDatasetSummary, RemoteDatasetEntry, RemoteTuiSeed,
     ViewMode,
 };
 use super::storage::{
-    load_bookmarks, open_in_file_manager, save_bookmarks, snapshot_reveal_target,
+    load_bookmarks, open_in_file_manager, open_url, save_bookmarks, snapshot_reveal_target,
 };
+
+const MOCK_ACCOUNT_DATA_SOURCE: &str = "Mocked from https://polaris.supply/llms.txt";
+const MOCK_BROWSER_LOGIN_URL: &str = "https://polaris.supply";
+const MOCK_REST_API_URL: &str = "https://api.polaris.supply";
+const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Debug)]
 pub(crate) struct RemoteListTui {
@@ -45,6 +49,7 @@ pub(crate) struct RemoteListTui {
     pub(crate) active_sync: Option<ActiveDaySync>,
     pub(crate) spinner_tick: usize,
     pub(crate) mode: ViewMode,
+    pub(crate) account_view: AccountView,
     pub(crate) api_key_prompt: Option<ApiKeyPromptState>,
 }
 
@@ -77,6 +82,7 @@ impl RemoteListTui {
         let local_summaries = summarize_local_snapshots(&local_snapshots);
         let local_keys = group_local_snapshot_keys(local_snapshots);
         let categories = browser_categories(&datasets);
+        let account_root = root.clone();
         let mut app = Self {
             datasets,
             filtered_indices: Vec::new(),
@@ -94,10 +100,49 @@ impl RemoteListTui {
             active_sync: None,
             spinner_tick: 0,
             mode: ViewMode::Splash,
+            account_view: Self::mock_account_view(account_root, concurrency),
             api_key_prompt: None,
         };
         app.recompute_filter();
         app
+    }
+
+    fn mock_account_view(root: PathBuf, concurrency: usize) -> AccountView {
+        AccountView {
+            data_source: MOCK_ACCOUNT_DATA_SOURCE,
+            login_url: MOCK_BROWSER_LOGIN_URL,
+            api_key_present: false,
+            api_key_source_label: "not configured".into(),
+            base_url: MOCK_REST_API_URL.into(),
+            root,
+            concurrency,
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
+        }
+    }
+
+    fn runtime_api_key_source_label(source: Option<ApiKeySource>) -> &'static str {
+        match source {
+            Some(ApiKeySource::Environment) => "POLARIS_API_KEY environment variable",
+            Some(ApiKeySource::CredentialStore) => "OS credential store",
+            None => "not configured",
+        }
+    }
+
+    fn account_view_from_config(config: &Config) -> AccountView {
+        AccountView {
+            data_source: MOCK_ACCOUNT_DATA_SOURCE,
+            login_url: MOCK_BROWSER_LOGIN_URL,
+            api_key_present: config.api_key.is_some(),
+            api_key_source_label: Self::runtime_api_key_source_label(config.api_key_source).into(),
+            base_url: config.base_url.clone(),
+            root: config.root.clone(),
+            concurrency: config.concurrency,
+            timeout_secs: config.timeout.as_secs(),
+        }
+    }
+
+    pub(crate) fn apply_runtime_config(&mut self, config: &Config) {
+        self.account_view = Self::account_view_from_config(config);
     }
 
     pub(crate) fn recompute_filter(&mut self) {
@@ -197,9 +242,9 @@ impl RemoteListTui {
     fn current_dataset_id(&self) -> Option<&str> {
         match &self.mode {
             ViewMode::Dataset(view) => Some(view.dataset.dataset.as_str()),
-            ViewMode::Browser | ViewMode::Splash => {
-                self.selected_dataset().map(|dataset| dataset.dataset.as_str())
-            }
+            ViewMode::Browser | ViewMode::Splash | ViewMode::Account => self
+                .selected_dataset()
+                .map(|dataset| dataset.dataset.as_str()),
         }
     }
 
@@ -230,8 +275,21 @@ impl RemoteListTui {
     pub(crate) fn dataset_view(&self) -> Option<&DatasetView> {
         match &self.mode {
             ViewMode::Dataset(view) => Some(view),
-            ViewMode::Browser | ViewMode::Splash => None,
+            ViewMode::Browser | ViewMode::Splash | ViewMode::Account => None,
         }
+    }
+
+    pub(crate) fn open_account_view(&mut self) {
+        self.mode = ViewMode::Account;
+    }
+
+    pub(crate) fn open_browser_login(&mut self) -> Result<()> {
+        open_url(self.account_view.login_url)?;
+        self.status_message = Some(format!(
+            "opened {} in your browser for Polaris login",
+            self.account_view.login_url
+        ));
+        Ok(())
     }
 
     pub(crate) async fn open_selected_dataset(&mut self, client: &PolarisClient) -> Result<()> {
@@ -479,39 +537,47 @@ impl RemoteListTui {
         }
     }
 
-    pub(crate) async fn submit_api_key_prompt(
-        &mut self,
-        client: &mut PolarisClient,
-    ) -> Result<()> {
-        let Some(prompt) = &mut self.api_key_prompt else {
-            return Ok(());
-        };
+    fn set_api_key_prompt_error(&mut self, message: String) {
+        if let Some(prompt) = &mut self.api_key_prompt {
+            prompt.error_message = Some(message);
+        }
+    }
 
-        let api_key = prompt.input.trim().to_string();
+    pub(crate) async fn submit_api_key_prompt(&mut self, client: &mut PolarisClient) -> Result<()> {
+        if self.api_key_prompt.is_none() {
+            return Ok(());
+        }
+
+        let api_key = self
+            .api_key_prompt
+            .as_ref()
+            .map(|prompt| prompt.input.trim().to_string())
+            .unwrap_or_default();
         if api_key.is_empty() {
-            prompt.error_message = Some("API key cannot be empty".into());
+            self.set_api_key_prompt_error("API key cannot be empty".into());
             return Ok(());
         }
 
         let store = match KeychainCredentialStore::new() {
             Ok(store) => store,
             Err(err) => {
-                prompt.error_message = Some(err.to_string());
+                self.set_api_key_prompt_error(err.to_string());
                 return Ok(());
             }
         };
         if let Err(err) = store.set_api_key(&api_key) {
-            prompt.error_message = Some(err.to_string());
+            self.set_api_key_prompt_error(err.to_string());
             return Ok(());
         }
 
         let config = match Config::from_env() {
             Ok(config) => config,
             Err(err) => {
-                prompt.error_message = Some(err.to_string());
+                self.set_api_key_prompt_error(err.to_string());
                 return Ok(());
             }
         };
+        self.apply_runtime_config(&config);
         *client = match PolarisClient::new(
             config.base_url.clone(),
             config.api_key.clone(),
@@ -519,7 +585,7 @@ impl RemoteListTui {
         ) {
             Ok(client) => client,
             Err(err) => {
-                prompt.error_message = Some(err.to_string());
+                self.set_api_key_prompt_error(err.to_string());
                 return Ok(());
             }
         };

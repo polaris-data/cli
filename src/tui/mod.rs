@@ -12,6 +12,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::api::PolarisClient;
+use crate::config::Config;
 use crate::error::{Result, TickError};
 use crate::layout::LocalSnapshotEntry;
 
@@ -26,8 +27,8 @@ mod tests;
 use render::render;
 
 pub(crate) use app::RemoteListTui;
-pub use model::{RemoteDatasetEntry, RemoteTuiSeed};
 pub(crate) use model::ViewMode;
+pub use model::{RemoteDatasetEntry, RemoteTuiSeed};
 
 #[cfg(test)]
 pub(crate) use coverage::{
@@ -41,9 +42,7 @@ pub(crate) use model::{
 #[cfg(test)]
 pub(crate) use render::format_snapshot_location;
 #[cfg(test)]
-pub(crate) use storage::{
-    load_bookmarks, save_bookmarks, snapshot_reveal_target,
-};
+pub(crate) use storage::{load_bookmarks, save_bookmarks, snapshot_reveal_target};
 
 pub fn can_render_tui() -> bool {
     io::stdout().is_terminal() && io::stdin().is_terminal()
@@ -56,20 +55,12 @@ pub async fn run_remote_list_tui(
     root: PathBuf,
     concurrency: usize,
     seed: RemoteTuiSeed,
+    config: &Config,
 ) -> Result<()> {
     let mut terminal = setup_terminal()?;
-    let result = run_event_loop(
-        &mut terminal,
-        client,
-        RemoteListTui::new(
-            datasets,
-            local_snapshots,
-            root,
-            concurrency,
-            seed,
-        ),
-    )
-    .await;
+    let mut app = RemoteListTui::new(datasets, local_snapshots, root, concurrency, seed);
+    app.apply_runtime_config(config);
+    let result = run_event_loop(&mut terminal, client, app).await;
     restore_terminal(&mut terminal)?;
     result
 }
@@ -131,10 +122,21 @@ async fn run_event_loop(
                     KeyCode::Esc => match app.mode {
                         ViewMode::Splash => {}
                         ViewMode::Browser => return Ok(()),
-                        ViewMode::Dataset(_) => app.mode = ViewMode::Browser,
+                        ViewMode::Dataset(_) | ViewMode::Account => app.mode = ViewMode::Browser,
                     },
                     KeyCode::Char(' ') if matches!(app.mode, ViewMode::Splash) => {
                         app.mode = ViewMode::Browser;
+                    }
+                    KeyCode::F(2) if !matches!(app.mode, ViewMode::Splash) => {
+                        app.open_account_view();
+                    }
+                    KeyCode::Char('.') if !matches!(app.mode, ViewMode::Splash) => {
+                        app.open_account_view();
+                    }
+                    KeyCode::F(3) if !matches!(app.mode, ViewMode::Splash) => {
+                        if let Err(err) = app.open_browser_login() {
+                            app.status_message = Some(format!("error: {err}"));
+                        }
                     }
                     KeyCode::Enter => {
                         if matches!(app.mode, ViewMode::Browser) {
@@ -189,7 +191,7 @@ async fn run_event_loop(
                                 app.status_message = Some(format!("error: {err}"));
                             }
                         }
-                        ViewMode::Splash => {}
+                        ViewMode::Splash | ViewMode::Account => {}
                     },
                     KeyCode::Backspace => {
                         if matches!(app.mode, ViewMode::Browser) {
