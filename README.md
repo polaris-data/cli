@@ -1,10 +1,21 @@
-# Polaris
-
-Access and manage high-fidelity market data from Hyperliquid, Lighter, and more.
-
 ![Polaris splash screen](assets/polaris-splash-screen.png)
 
-[Installation](#installation) | [Quick Start](#quick-start) | [Common Workflows](#common-workflows) | [CLI Overview](#cli-overview) | [Command Reference](#command-reference) | [Configuration](#configuration)
+<h1 align="center">Polaris</h1>
+
+<p align="center">
+  Access and manage high-fidelity market data from Hyperliquid, Lighter, and more.
+</p>
+
+<p align="center">
+  <a href="#installation">Installation</a> |
+  <a href="#quick-start">Quick Start</a> |
+  <a href="#common-workflows">Common Workflows</a> |
+  <a href="#cli-overview">CLI Overview</a> |
+  <a href="#command-reference">Command Reference</a> |
+  <a href="#configuration">Configuration</a>
+</p>
+
+---
 
 ## Why Polaris
 
