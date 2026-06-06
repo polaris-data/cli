@@ -120,7 +120,7 @@ async fn run_event_loop(
                 }
                 match key.code {
                     KeyCode::Esc => match app.mode {
-                        ViewMode::Splash => {}
+                        ViewMode::Splash => return Ok(()),
                         ViewMode::Browser => return Ok(()),
                         ViewMode::Dataset(_) | ViewMode::Account => app.mode = ViewMode::Browser,
                     },
