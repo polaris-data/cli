@@ -121,3 +121,35 @@ pub(crate) fn open_in_file_manager(target: &FileManagerTarget) -> Result<()> {
         Ok(())
     }
 }
+
+pub(crate) fn open_url(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(url)
+            .spawn()
+            .with_context(|| format!("failed to launch browser for {url}"))
+            .map_err(TickError::Other)?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(url)
+            .spawn()
+            .with_context(|| format!("failed to launch browser for {url}"))
+            .map_err(TickError::Other)?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .with_context(|| format!("failed to launch browser for {url}"))
+            .map_err(TickError::Other)?;
+        Ok(())
+    }
+}

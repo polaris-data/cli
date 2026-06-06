@@ -140,6 +140,18 @@ pub(crate) struct DatasetView {
     pub(crate) selected_day: usize,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct AccountView {
+    pub(crate) data_source: &'static str,
+    pub(crate) login_url: &'static str,
+    pub(crate) api_key_present: bool,
+    pub(crate) api_key_source_label: String,
+    pub(crate) base_url: String,
+    pub(crate) root: PathBuf,
+    pub(crate) concurrency: usize,
+    pub(crate) timeout_secs: u64,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ApiKeyPromptState {
     pub(crate) input: String,
@@ -222,6 +234,7 @@ pub(crate) enum DaySyncUpdate {
 pub(crate) enum ViewMode {
     Splash,
     Browser,
+    Account,
     Dataset(DatasetView),
 }
 
