@@ -1,10 +1,4 @@
-![Polaris splash screen](assets/polaris-splash-screen.png)
-
-<h1 align="center">Polaris</h1>
-
-<p align="center">
-  Access and manage high-fidelity market data from Hyperliquid, Lighter, and more.
-</p>
+![Polaris header](assets/polaris-header.png)
 
 <p align="center">
   <a href="#installation">Installation</a> |
