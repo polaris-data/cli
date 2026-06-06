@@ -57,7 +57,7 @@ fn render_splash(frame: &mut ratatui::Frame<'_>, spinner_tick: usize) {
 
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(splash_sky_lines(sky_area, spinner_tick)).alignment(Alignment::Center),
+        Paragraph::new(splash_motif_lines(sky_area, spinner_tick)).alignment(Alignment::Center),
         sky_area,
     );
     frame.render_widget(
@@ -91,33 +91,22 @@ fn render_splash(frame: &mut ratatui::Frame<'_>, spinner_tick: usize) {
     );
 }
 
-fn splash_sky_lines(area: Rect, spinner_tick: usize) -> Vec<Line<'static>> {
+fn splash_motif_lines(area: Rect, spinner_tick: usize) -> Vec<Line<'static>> {
     let height = usize::from(area.height).max(8);
     let width = usize::from(area.width).max(24);
-    let pole_x = (width as f32 * 0.58).min((width.saturating_sub(1)) as f32);
-    let pole_y = (height as f32 * 0.30).max(1.0);
     let mut lines = Vec::with_capacity(height);
 
     for row in 0..height {
-        lines.push(splash_sky_line(
-            width,
-            height,
-            row,
-            pole_x,
-            pole_y,
-            spinner_tick,
-        ));
+        lines.push(splash_motif_line(width, height, row, spinner_tick));
     }
 
     lines
 }
 
-fn splash_sky_line(
+fn splash_motif_line(
     width: usize,
     height: usize,
     row: usize,
-    pole_x: f32,
-    pole_y: f32,
     spinner_tick: usize,
 ) -> Line<'static> {
     if row + 1 >= height {
@@ -127,76 +116,83 @@ fn splash_sky_line(
     let mut spans = Vec::with_capacity(width);
 
     for col in 0..width {
-        spans.push(splash_sky_cell(
-            width,
-            height,
-            col,
-            row,
-            pole_x,
-            pole_y,
-            spinner_tick,
-        ));
+        spans.push(splash_motif_cell(width, height, col, row, spinner_tick));
     }
 
     Line::from(spans)
 }
 
-fn splash_sky_cell(
+fn splash_motif_cell(
     width: usize,
     height: usize,
     col: usize,
     row: usize,
-    pole_x: f32,
-    pole_y: f32,
-    spinner_tick: usize,
+    _spinner_tick: usize,
 ) -> Span<'static> {
-    let x = col as f32;
-    let y = row as f32;
-    let dx = (x - pole_x) * 0.48;
-    let dy = y - pole_y;
-    let radius = (dx * dx + dy * dy).sqrt();
-    let ring_phase = radius * 1.33;
-    let ring_error = (ring_phase - ring_phase.round()).abs();
-    let angle = dy.atan2(dx);
-    let sweep = angle * 4.0 + spinner_tick as f32 * 0.18 + radius * 0.09;
-    let sparkle = sweep.sin().abs();
-    let horizon_fade = 1.0 - (row as f32 / height.max(1) as f32) * 0.35;
+    let width_f = width as f32;
+    let height_f = height as f32;
 
-    if radius < 1.4 {
-        return Span::styled(
-            "*",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        );
+    let mut shade = None;
+
+    let layers = [
+        (
+            0isize,
+            0isize,
+            width,
+            (height_f * 0.34).ceil() as usize,
+            '█',
+            Color::DarkGray,
+        ),
+        (
+            (width_f * 0.18).floor() as isize,
+            0isize,
+            (width_f * 0.82).ceil() as usize,
+            (height_f * 0.52).ceil() as usize,
+            '█',
+            Color::Gray,
+        ),
+        (
+            (width_f * 0.46).floor() as isize,
+            0isize,
+            (width_f * 0.54).ceil() as usize,
+            (height_f * 0.68).ceil() as usize,
+            '█',
+            Color::DarkGray,
+        ),
+        (
+            (width_f * 0.94).floor() as isize,
+            0isize,
+            (width_f * 0.06).max(1.0).ceil() as usize,
+            (height_f * 0.86).ceil() as usize,
+            '█',
+            Color::Gray,
+        ),
+    ];
+
+    for (left, top, rect_width, rect_height, symbol, color) in layers {
+        let within_x = (col as isize) >= left && (col as isize) < left + rect_width as isize;
+        let within_y = (row as isize) >= top && (row as isize) < top + rect_height as isize;
+
+        if within_x && within_y {
+            shade = Some((symbol, color, left, top, rect_width, rect_height));
+        }
     }
 
-    if ring_error > 0.12 * horizon_fade {
+    let Some((symbol, color, left, top, rect_width, rect_height)) = shade else {
         return Span::raw(" ");
-    }
-
-    let color = if sparkle > 0.96 {
-        Color::White
-    } else if sparkle > 0.86 {
-        Color::Cyan
-    } else if radius < width as f32 * 0.10 {
-        Color::Gray
-    } else if radius < width as f32 * 0.22 {
-        Color::DarkGray
-    } else {
-        Color::Gray
-    };
-    let symbol = if sparkle > 0.97 {
-        "*"
-    } else if sparkle > 0.90 {
-        ":"
-    } else if ((col + row + spinner_tick / 2) % 11) == 0 {
-        "'"
-    } else {
-        "."
     };
 
-    Span::styled(symbol, Style::default().fg(color))
+    let edge = (col as isize) == left
+        || (col + 1) == (left + rect_width as isize).max(0) as usize
+        || (row as isize) == top
+        || (row + 1) == (top + rect_height as isize).max(0) as usize;
+    let style = if edge {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(color)
+    };
+
+    Span::styled(symbol.to_string(), style)
 }
 
 fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
