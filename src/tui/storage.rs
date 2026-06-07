@@ -8,10 +8,14 @@ use anyhow::Context;
 
 use crate::error::{Result, TickError};
 
-use super::model::{BookmarkStore, FileManagerTarget};
+use super::model::{AccountIdentity, BookmarkStore, FileManagerTarget};
 
 fn bookmarks_path(root: &Path) -> PathBuf {
     root.join("bookmarks.json")
+}
+
+fn account_identity_path(root: &Path) -> PathBuf {
+    root.join("account").join("identity.json")
 }
 
 pub(crate) fn load_bookmarks(root: &Path) -> Result<BTreeSet<String>> {
@@ -36,6 +40,32 @@ pub(crate) fn save_bookmarks(root: &Path, bookmarks: &BTreeSet<String>) -> Resul
     })
     .with_context(|| format!("failed to serialize {}", path.display()))
     .map_err(TickError::Other)?;
+    fs::write(&path, contents).map_err(|err| TickError::Other(err.into()))
+}
+
+pub(crate) fn load_account_identity(root: &Path) -> Result<Option<AccountIdentity>> {
+    let path = account_identity_path(root);
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(TickError::Other(err.into())),
+    };
+
+    serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse {}", path.display()))
+        .map(Some)
+        .map_err(TickError::Other)
+}
+
+pub(crate) fn save_account_identity(root: &Path, identity: &AccountIdentity) -> Result<()> {
+    let path = account_identity_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| TickError::Other(err.into()))?;
+    }
+
+    let contents = serde_json::to_string_pretty(identity)
+        .with_context(|| format!("failed to serialize {}", path.display()))
+        .map_err(TickError::Other)?;
     fs::write(&path, contents).map_err(|err| TickError::Other(err.into()))
 }
 

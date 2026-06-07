@@ -5,10 +5,10 @@ use std::time::Duration;
 use chrono::{DateTime, NaiveDate, Utc};
 use tokio::sync::mpsc::{error::TryRecvError, unbounded_channel};
 
-use crate::api::PolarisClient;
+use crate::api::{CliAuthPollResponse, PolarisClient};
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::config::{ApiKeySource, Config};
-use crate::error::Result;
+use crate::error::{Result, TickError};
 use crate::layout::{Layout as AppLayout, LocalSnapshotEntry};
 use crate::planner::{TimeWindow, build_sync_plan};
 use crate::syncer::{acquire_sync_lock, execute_sync_with_progress};
@@ -18,18 +18,32 @@ use super::coverage::{
     format_byte_progress, group_local_snapshot_keys, select_initial_day, summarize_local_snapshots,
 };
 use super::model::{
-    AccountView, ActiveDaySync, ApiKeyPromptState, ApiKeyRequirement, BrowserCategory, DatasetView,
-    DaySyncUpdate, FileManagerTarget, LocalDatasetSummary, RemoteDatasetEntry, RemoteTuiSeed,
-    ViewMode,
+    AccountIdentity, AccountLoginSession, AccountView, ActiveDaySync, ApiKeyPromptState,
+    ApiKeyRequirement, BrowserCategory, DatasetView, DaySyncUpdate, FileManagerTarget,
+    LocalDatasetSummary, RemoteDatasetEntry, RemoteTuiSeed, ViewMode,
 };
 use super::storage::{
-    load_bookmarks, open_in_file_manager, open_url, save_bookmarks, snapshot_reveal_target,
+    load_account_identity, load_bookmarks, open_in_file_manager, open_url, save_account_identity,
+    save_bookmarks, snapshot_reveal_target,
 };
 
-const MOCK_ACCOUNT_DATA_SOURCE: &str = "Mocked from https://polaris.supply/llms.txt";
-const MOCK_BROWSER_LOGIN_URL: &str = "https://polaris.supply";
 const MOCK_REST_API_URL: &str = "https://api.polaris.supply";
-const DEFAULT_TIMEOUT_SECS: u64 = 60;
+const MIN_CLI_AUTH_POLL_INTERVAL_MS: u64 = 250;
+
+#[derive(Debug)]
+enum CliLoginUpdate {
+    Approved {
+        api_key: String,
+        identity: AccountIdentity,
+    },
+    Error(String),
+}
+
+#[derive(Debug)]
+enum AccountRefreshUpdate {
+    Refreshed(AccountIdentity),
+    Error(String),
+}
 
 #[derive(Debug)]
 pub(crate) struct RemoteListTui {
@@ -50,6 +64,8 @@ pub(crate) struct RemoteListTui {
     pub(crate) spinner_tick: usize,
     pub(crate) mode: ViewMode,
     pub(crate) account_view: AccountView,
+    active_cli_login_updates: Option<tokio::sync::mpsc::UnboundedReceiver<CliLoginUpdate>>,
+    active_account_refresh_updates: Option<tokio::sync::mpsc::UnboundedReceiver<AccountRefreshUpdate>>,
     pub(crate) api_key_prompt: Option<ApiKeyPromptState>,
 }
 
@@ -101,48 +117,119 @@ impl RemoteListTui {
             spinner_tick: 0,
             mode: ViewMode::Splash,
             account_view: Self::mock_account_view(account_root, concurrency),
+            active_cli_login_updates: None,
+            active_account_refresh_updates: None,
             api_key_prompt: None,
         };
         app.recompute_filter();
         app
     }
 
-    fn mock_account_view(root: PathBuf, concurrency: usize) -> AccountView {
+    fn mock_account_view(root: PathBuf, _concurrency: usize) -> AccountView {
         AccountView {
-            data_source: MOCK_ACCOUNT_DATA_SOURCE,
-            login_url: MOCK_BROWSER_LOGIN_URL,
             api_key_present: false,
             api_key_source_label: "not configured".into(),
             base_url: MOCK_REST_API_URL.into(),
             root,
-            concurrency,
-            timeout_secs: DEFAULT_TIMEOUT_SECS,
+            active_login: None,
+            identity: None,
         }
     }
 
     fn runtime_api_key_source_label(source: Option<ApiKeySource>) -> &'static str {
         match source {
             Some(ApiKeySource::Environment) => "POLARIS_API_KEY environment variable",
-            Some(ApiKeySource::CredentialStore) => "OS credential store",
+            Some(ApiKeySource::CredentialStore) => "stored credential",
             None => "not configured",
         }
     }
 
     fn account_view_from_config(config: &Config) -> AccountView {
         AccountView {
-            data_source: MOCK_ACCOUNT_DATA_SOURCE,
-            login_url: MOCK_BROWSER_LOGIN_URL,
             api_key_present: config.api_key.is_some(),
             api_key_source_label: Self::runtime_api_key_source_label(config.api_key_source).into(),
             base_url: config.base_url.clone(),
             root: config.root.clone(),
-            concurrency: config.concurrency,
-            timeout_secs: config.timeout.as_secs(),
+            active_login: None,
+            identity: None,
         }
     }
 
     pub(crate) fn apply_runtime_config(&mut self, config: &Config) {
+        let active_login = self.account_view.active_login.clone();
+        let identity = self.account_view.identity.clone().or_else(|| {
+            config
+                .api_key
+                .as_ref()
+                .and_then(|_| load_account_identity(&config.root).ok().flatten())
+        });
         self.account_view = Self::account_view_from_config(config);
+        self.account_view.active_login = active_login;
+        self.account_view.identity = identity;
+    }
+
+    pub(crate) async fn hydrate_account_identity(&mut self, client: &PolarisClient) -> Result<()> {
+        if !client.has_api_key() {
+            return Ok(());
+        }
+
+        let identity = Self::fetch_account_identity(client).await?;
+        save_account_identity(&self.account_view.root, &identity)?;
+        self.account_view.identity = Some(identity);
+        Ok(())
+    }
+
+    async fn fetch_account_identity(client: &PolarisClient) -> Result<AccountIdentity> {
+        let account = client.fetch_account().await?;
+        Ok(AccountIdentity {
+            user_id: account.user_id,
+            display_name: account.identity.display_name,
+            email: account.identity.email,
+            plan: Some(account.subscription.tier),
+            wallet_address: account.identity.wallet_address,
+            avatar_url: account.identity.avatar_url,
+        })
+    }
+
+    pub(crate) fn open_pricing_page(&mut self) -> Result<()> {
+        open_url("https://polaris.supply/pricing")?;
+        self.status_message = Some("opened https://polaris.supply/pricing in your browser".into());
+        Ok(())
+    }
+
+    pub(crate) fn refresh_account_details(&mut self, client: &PolarisClient) -> Result<()> {
+        if !client.has_api_key() {
+            self.status_message = Some("account refresh requires a stored API key".into());
+            return Ok(());
+        }
+
+        let mut identity = self.account_view.identity.clone().unwrap_or(AccountIdentity {
+            user_id: String::new(),
+            display_name: None,
+            email: None,
+            plan: None,
+            wallet_address: None,
+            avatar_url: None,
+        });
+        identity.display_name = None;
+        identity.email = None;
+        identity.plan = None;
+        self.account_view.identity = Some(identity);
+
+        let (tx, rx) = unbounded_channel();
+        let client = client.clone();
+        tokio::spawn(async move {
+            match Self::fetch_account_identity(&client).await {
+                Ok(identity) => {
+                    let _ = tx.send(AccountRefreshUpdate::Refreshed(identity));
+                }
+                Err(err) => {
+                    let _ = tx.send(AccountRefreshUpdate::Error(err.to_string()));
+                }
+            }
+        });
+        self.active_account_refresh_updates = Some(rx);
+        Ok(())
     }
 
     pub(crate) fn recompute_filter(&mut self) {
@@ -283,12 +370,112 @@ impl RemoteListTui {
         self.mode = ViewMode::Account;
     }
 
-    pub(crate) fn open_browser_login(&mut self) -> Result<()> {
-        open_url(self.account_view.login_url)?;
+    pub(crate) async fn handle_account_shortcut(&mut self, client: &PolarisClient) -> Result<()> {
+        if !matches!(self.mode, ViewMode::Account) {
+            self.open_account_view();
+            return Ok(());
+        }
+
+        if self.account_view.api_key_present {
+            open_url("https://polaris.supply/account")?;
+            self.status_message = Some("opened https://polaris.supply/account in your browser".into());
+            return Ok(());
+        }
+
+        self.start_or_resume_cli_login(client).await
+    }
+
+    async fn start_or_resume_cli_login(&mut self, client: &PolarisClient) -> Result<()> {
+        if let Some(active_login) = &self.account_view.active_login {
+            open_url(&active_login.login_url)?;
+            self.status_message = Some(format!(
+                "reopened browser login; enter code {}",
+                active_login.user_code
+            ));
+            return Ok(());
+        }
+
+        let start = client.start_cli_auth().await?;
+        let login_url = start.login_url.clone();
+        let user_code = start.user_code.clone();
+        let expires_at = start.expires_at;
+        let (tx, rx) = unbounded_channel();
+        let poll_client = client.clone();
+        let request_id = start.request_id;
+        let poll_token = start.poll_token;
+        let initial_interval_ms = start.interval_ms.max(MIN_CLI_AUTH_POLL_INTERVAL_MS);
+
+        tokio::spawn(async move {
+            let mut interval_ms = initial_interval_ms;
+            loop {
+                match poll_client.poll_cli_auth(&request_id, &poll_token).await {
+                    Ok(CliAuthPollResponse::Pending {
+                        interval_ms: next_interval_ms,
+                        ..
+                    }) => {
+                        interval_ms = next_interval_ms.max(MIN_CLI_AUTH_POLL_INTERVAL_MS);
+                        tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+                    }
+                    Ok(CliAuthPollResponse::Approved {
+                        user_id,
+                        display_name,
+                        email,
+                        wallet_address,
+                        avatar_url,
+                        api_key,
+                        ..
+                    }) => {
+                        let _ = tx.send(CliLoginUpdate::Approved {
+                            api_key,
+                            identity: AccountIdentity {
+                                user_id,
+                                display_name,
+                                email,
+                                plan: None,
+                                wallet_address,
+                                avatar_url,
+                            },
+                        });
+                        return;
+                    }
+                    Ok(CliAuthPollResponse::Consumed) => {
+                        let _ = tx.send(CliLoginUpdate::Error(
+                            "login session was already consumed".into(),
+                        ));
+                        return;
+                    }
+                    Ok(CliAuthPollResponse::Expired) => {
+                        let _ = tx.send(CliLoginUpdate::Error("login session expired".into()));
+                        return;
+                    }
+                    Err(err) if err.retryable() => {
+                        tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+                    }
+                    Err(err) => {
+                        let _ = tx.send(CliLoginUpdate::Error(err.to_string()));
+                        return;
+                    }
+                }
+            }
+        });
+
+        self.account_view.active_login = Some(AccountLoginSession {
+            user_code: user_code.clone(),
+            login_url: login_url.clone(),
+            expires_at,
+        });
+        self.active_cli_login_updates = Some(rx);
         self.status_message = Some(format!(
-            "opened {} in your browser for Polaris login",
-            self.account_view.login_url
+            "waiting for browser approval; enter code {}",
+            user_code
         ));
+
+        if let Err(err) = open_url(&login_url) {
+            self.status_message = Some(format!(
+                "open {} manually and enter code {} ({err})",
+                login_url, user_code
+            ));
+        }
         Ok(())
     }
 
@@ -543,6 +730,30 @@ impl RemoteListTui {
         }
     }
 
+    fn apply_runtime_client_config(
+        &mut self,
+        client: &mut PolarisClient,
+        config: &Config,
+    ) -> Result<()> {
+        self.apply_runtime_config(config);
+        *client = PolarisClient::new(config.base_url.clone(), config.api_key.clone(), config.timeout)?;
+        Ok(())
+    }
+
+    fn store_api_key_and_load_config<S, F>(store: &S, api_key: &str, mut load_config: F) -> Result<Config>
+    where
+        S: CredentialStore,
+        F: FnMut() -> Result<Config>,
+    {
+        let api_key = api_key.trim();
+        if api_key.is_empty() {
+            return Err(TickError::InvalidArgument("API key cannot be empty".into()));
+        }
+
+        store.set_api_key(api_key)?;
+        load_config()
+    }
+
     pub(crate) async fn submit_api_key_prompt(&mut self, client: &mut PolarisClient) -> Result<()> {
         if self.api_key_prompt.is_none() {
             return Ok(());
@@ -565,33 +776,132 @@ impl RemoteListTui {
                 return Ok(());
             }
         };
-        if let Err(err) = store.set_api_key(&api_key) {
-            self.set_api_key_prompt_error(err.to_string());
-            return Ok(());
-        }
-
-        let config = match Config::from_env() {
+        let config = match Self::store_api_key_and_load_config(&store, &api_key, Config::from_env) {
             Ok(config) => config,
             Err(err) => {
                 self.set_api_key_prompt_error(err.to_string());
                 return Ok(());
             }
         };
-        self.apply_runtime_config(&config);
-        *client = match PolarisClient::new(
-            config.base_url.clone(),
-            config.api_key.clone(),
-            config.timeout,
-        ) {
-            Ok(client) => client,
-            Err(err) => {
-                self.set_api_key_prompt_error(err.to_string());
-                return Ok(());
-            }
-        };
+        if let Err(err) = self.apply_runtime_client_config(client, &config) {
+            self.set_api_key_prompt_error(err.to_string());
+            return Ok(());
+        }
 
         self.close_api_key_prompt();
         self.sync_selected_day(client).await
+    }
+
+    fn apply_session_api_key(
+        &mut self,
+        client: &mut PolarisClient,
+        api_key: String,
+        source_label: &str,
+    ) -> Result<()> {
+        *client = PolarisClient::new(
+            self.account_view.base_url.clone(),
+            Some(api_key),
+            Duration::from_secs(60),
+        )?;
+        self.account_view.api_key_present = true;
+        self.account_view.api_key_source_label = source_label.into();
+        Ok(())
+    }
+
+    pub(crate) async fn pump_cli_login_updates(
+        &mut self,
+        client: &mut PolarisClient,
+    ) -> Result<()> {
+        let Some(receiver) = self.active_cli_login_updates.as_mut() else {
+            return Ok(());
+        };
+
+        let update = receiver.try_recv();
+        match update {
+            Ok(CliLoginUpdate::Approved { api_key, identity }) => {
+                self.account_view.active_login = None;
+                self.account_view.identity = Some(identity.clone());
+                self.active_cli_login_updates = None;
+                let identity_persist_result = save_account_identity(&self.account_view.root, &identity);
+
+                match KeychainCredentialStore::new()
+                    .and_then(|store| Self::store_api_key_and_load_config(&store, &api_key, Config::from_env))
+                {
+                    Ok(config) => {
+                        self.apply_runtime_client_config(client, &config)?;
+                        if let Err(err) = self.hydrate_account_identity(client).await {
+                            self.status_message = Some(format!(
+                                "signed in, but failed to refresh account details: {err}"
+                            ));
+                            return Ok(());
+                        }
+                        let display_name = identity
+                            .display_name
+                            .as_deref()
+                            .or(identity.email.as_deref())
+                            .unwrap_or(identity.user_id.as_str());
+                        self.status_message = Some(match identity_persist_result {
+                            Ok(()) => format!("signed in as {display_name}; API key saved"),
+                            Err(err) => format!(
+                                "signed in as {display_name}; API key saved, but failed to persist account details: {err}"
+                            ),
+                        });
+                    }
+                    Err(err) => {
+                        self.apply_session_api_key(
+                            client,
+                            api_key,
+                            "current session only (credential store failed)",
+                        )?;
+                        let _ = self.hydrate_account_identity(client).await;
+                        self.status_message = Some(match identity_persist_result {
+                            Ok(()) => format!("signed in, but failed to persist API key: {err}"),
+                            Err(identity_err) => format!(
+                                "signed in, but failed to persist API key: {err}; also failed to persist account details: {identity_err}"
+                            ),
+                        });
+                    }
+                }
+            }
+            Ok(CliLoginUpdate::Error(message)) => {
+                self.account_view.active_login = None;
+                self.active_cli_login_updates = None;
+                self.status_message = Some(message);
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.account_view.active_login = None;
+                self.active_cli_login_updates = None;
+                self.status_message = Some("browser login stopped unexpectedly".into());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn pump_account_refresh_updates(&mut self) -> Result<()> {
+        let Some(receiver) = self.active_account_refresh_updates.as_mut() else {
+            return Ok(());
+        };
+
+        match receiver.try_recv() {
+            Ok(AccountRefreshUpdate::Refreshed(identity)) => {
+                save_account_identity(&self.account_view.root, &identity)?;
+                self.account_view.identity = Some(identity);
+                self.active_account_refresh_updates = None;
+            }
+            Ok(AccountRefreshUpdate::Error(message)) => {
+                self.active_account_refresh_updates = None;
+                self.status_message = Some(format!("error: {message}"));
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.active_account_refresh_updates = None;
+                self.status_message = Some("account refresh stopped unexpectedly".into());
+            }
+        }
+
+        Ok(())
     }
 
     pub(crate) async fn pump_sync_updates(&mut self, client: &PolarisClient) -> Result<()> {

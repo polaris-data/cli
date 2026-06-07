@@ -36,13 +36,16 @@ pub(crate) use coverage::{
 };
 #[cfg(test)]
 pub(crate) use model::{
-    ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView, DaySyncUpdate,
+    AccountIdentity, ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView, DaySyncUpdate,
     FileManagerTarget,
 };
 #[cfg(test)]
 pub(crate) use render::format_snapshot_location;
 #[cfg(test)]
-pub(crate) use storage::{load_bookmarks, save_bookmarks, snapshot_reveal_target};
+pub(crate) use storage::{
+    load_account_identity, load_bookmarks, save_account_identity, save_bookmarks,
+    snapshot_reveal_target,
+};
 
 pub fn can_render_tui() -> bool {
     io::stdout().is_terminal() && io::stdin().is_terminal()
@@ -60,6 +63,11 @@ pub async fn run_remote_list_tui(
     let mut terminal = setup_terminal()?;
     let mut app = RemoteListTui::new(datasets, local_snapshots, root, concurrency, seed);
     app.apply_runtime_config(config);
+    if let Err(err) = app.hydrate_account_identity(&client).await {
+        if app.account_view.identity.is_none() {
+            app.status_message = Some(format!("warning: failed to refresh account details: {err}"));
+        }
+    }
     let result = run_event_loop(&mut terminal, client, app).await;
     restore_terminal(&mut terminal)?;
     result
@@ -90,6 +98,8 @@ async fn run_event_loop(
 ) -> Result<()> {
     let mut client = client;
     loop {
+        app.pump_cli_login_updates(&mut client).await?;
+        app.pump_account_refresh_updates()?;
         app.pump_sync_updates(&client).await?;
         terminal
             .draw(|frame| render(frame, &app))
@@ -131,10 +141,26 @@ async fn run_event_loop(
                         app.open_account_view();
                     }
                     KeyCode::Char('.') if !matches!(app.mode, ViewMode::Splash) => {
-                        app.open_account_view();
+                        if let Err(err) = app.handle_account_shortcut(&client).await {
+                            app.status_message = Some(format!("error: {err}"));
+                        }
                     }
                     KeyCode::F(3) if !matches!(app.mode, ViewMode::Splash) => {
-                        if let Err(err) = app.open_browser_login() {
+                        if let Err(err) = app.handle_account_shortcut(&client).await {
+                            app.status_message = Some(format!("error: {err}"));
+                        }
+                    }
+                    KeyCode::Char('p') | KeyCode::Char('P')
+                        if matches!(app.mode, ViewMode::Account) =>
+                    {
+                        if let Err(err) = app.open_pricing_page() {
+                            app.status_message = Some(format!("error: {err}"));
+                        }
+                    }
+                    KeyCode::Char('r') | KeyCode::Char('R')
+                        if matches!(app.mode, ViewMode::Account) =>
+                    {
+                        if let Err(err) = app.refresh_account_details(&client) {
                             app.status_message = Some(format!("error: {err}"));
                         }
                     }

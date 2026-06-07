@@ -140,16 +140,31 @@ pub(crate) struct DatasetView {
     pub(crate) selected_day: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct AccountIdentity {
+    pub(crate) user_id: String,
+    pub(crate) display_name: Option<String>,
+    pub(crate) email: Option<String>,
+    pub(crate) plan: Option<String>,
+    pub(crate) wallet_address: Option<String>,
+    pub(crate) avatar_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AccountLoginSession {
+    pub(crate) user_code: String,
+    pub(crate) login_url: String,
+    pub(crate) expires_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct AccountView {
-    pub(crate) data_source: &'static str,
-    pub(crate) login_url: &'static str,
     pub(crate) api_key_present: bool,
     pub(crate) api_key_source_label: String,
     pub(crate) base_url: String,
     pub(crate) root: PathBuf,
-    pub(crate) concurrency: usize,
-    pub(crate) timeout_secs: u64,
+    pub(crate) active_login: Option<AccountLoginSession>,
+    pub(crate) identity: Option<AccountIdentity>,
 }
 
 #[derive(Debug, Default)]

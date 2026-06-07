@@ -14,16 +14,15 @@ use super::coverage::{
     access_color, compact_count, render_completion_bar, spinner_frame, sync_adjusted_day_totals,
 };
 use super::model::{
-    AccountView, ActiveDaySync, ApiKeyPromptState, DatasetView, DayCoverage, DayState, ViewMode,
+    AccountIdentity, AccountLoginSession, ActiveDaySync, ApiKeyPromptState, DatasetView,
+    DayCoverage, DayState, ViewMode,
 };
 
 pub(crate) fn render(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     match &app.mode {
         ViewMode::Splash => render_splash(frame, app.spinner_tick),
         ViewMode::Browser => render_browser(frame, app),
-        ViewMode::Account => {
-            render_account_view(frame, &app.account_view, app.status_message.as_deref())
-        }
+        ViewMode::Account => render_account_view(frame, app),
         ViewMode::Dataset(view) => render_dataset_view(
             frame,
             view,
@@ -270,10 +269,10 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
 
 fn render_account_view(
     frame: &mut ratatui::Frame<'_>,
-    account: &AccountView,
-    status_message: Option<&str>,
+    app: &RemoteListTui,
 ) {
-    let area = centered_rect(90, 18, frame.area());
+    let account = &app.account_view;
+    let area = centered_rect(90, 24, frame.area());
 
     let status_style = if account.api_key_present {
         Style::default()
@@ -289,10 +288,10 @@ fn render_account_view(
     } else {
         "not configured"
     };
-    let intro = if account.api_key_present {
-        "API key is ready for restricted and preview history."
+    let intro = if account.active_login.is_some() {
+        "Finish login in your browser. Polaris will save the returned API key automatically."
     } else {
-        "Sign in on polaris.supply to add an API key."
+        "Press . again to sign in in your browser and add an API key."
     };
 
     let mut lines = vec![
@@ -303,18 +302,19 @@ fn render_account_view(
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from(intro),
+        Line::from((!account.api_key_present).then_some(intro).unwrap_or("")),
         Line::from(""),
-        account_row("source", account.data_source),
-        account_row("login", account.login_url),
-        account_row("api key", &account.api_key_source_label),
-        account_row("base", &account.base_url),
-        account_row("root", &format_account_root(&account.root)),
-        account_row("workers", &account.concurrency.to_string()),
-        account_row("timeout", &format!("{}s", account.timeout_secs)),
     ];
-    if let Some(status) = status_message {
-        lines.push(account_row("status", status));
+    if let Some(identity) = &account.identity {
+        append_identity_rows(&mut lines, identity);
+        lines.push(Line::from(""));
+    }
+    lines.push(account_divider());
+    lines.push(account_row("base", &account.base_url));
+    lines.push(account_row("root", &format_account_root(&account.root)));
+    if let Some(active_login) = &account.active_login {
+        lines.push(Line::from(""));
+        append_active_login_rows(&mut lines, active_login);
     }
 
     let status_title = Title {
@@ -340,7 +340,47 @@ fn render_account_view(
         width: frame.area().width,
         height: 1,
     };
-    render_footer(frame, footer_area, " Esc back  │  Ctrl+C quit ");
+    let footer = if account.api_key_present {
+        " . open account  │  P pricing  │  R refresh  │  Esc back  │  Ctrl+C quit "
+    } else if account.active_login.is_some() {
+        " . reopen browser  │  P pricing  │  R refresh  │  Esc back  │  Ctrl+C quit "
+    } else {
+        " . sign in  │  P pricing  │  R refresh  │  Esc back  │  Ctrl+C quit "
+    };
+    render_footer(frame, footer_area, footer);
+}
+
+fn append_active_login_rows(lines: &mut Vec<Line<'static>>, active_login: &AccountLoginSession) {
+    lines.push(account_row("code", &active_login.user_code));
+    lines.push(account_row(
+        "expires",
+        &active_login
+            .expires_at
+            .format("%Y-%m-%d %H:%M:%SZ")
+            .to_string(),
+    ));
+    lines.push(account_row("browser", &active_login.login_url));
+}
+
+fn append_identity_rows(lines: &mut Vec<Line<'static>>, identity: &AccountIdentity) {
+    lines.push(account_row(
+        "name",
+        identity.display_name.as_deref().unwrap_or("--"),
+    ));
+    lines.push(account_row(
+        "email",
+        identity.email.as_deref().unwrap_or("--"),
+    ));
+    lines.push(account_row(
+        "plan",
+        identity.plan.as_deref().unwrap_or("--"),
+    ));
+    if let Some(wallet_address) = &identity.wallet_address {
+        lines.push(account_row("wallet", wallet_address));
+    }
+    if let Some(avatar_url) = &identity.avatar_url {
+        lines.push(account_row("avatar", avatar_url));
+    }
 }
 
 fn account_row(label: &str, value: &str) -> Line<'static> {
@@ -348,6 +388,13 @@ fn account_row(label: &str, value: &str) -> Line<'static> {
         Span::styled(format!("{label:<7}"), Style::default().fg(Color::DarkGray)),
         Span::raw(value.to_string()),
     ])
+}
+
+fn account_divider() -> Line<'static> {
+    Line::from(Span::styled(
+        "────────────────────────────────────────────────────────────────────",
+        Style::default().fg(Color::DarkGray),
+    ))
 }
 
 fn format_account_root(root: &Path) -> String {

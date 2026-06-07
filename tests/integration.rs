@@ -6,16 +6,17 @@ use std::time::Duration;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
 use polaris::api::{
-    CatalogAsset, CatalogExchange, CatalogResponse, DatasetAccess, DatasetAccessStatus,
-    PolarisClient, SnapshotEntry,
+    AccountResponse, CatalogAsset, CatalogExchange, CatalogResponse, CliAuthPollResponse,
+    CliAuthStartResponse, DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry,
 };
 use polaris::config::Config;
 use polaris::error::TickError;
@@ -266,6 +267,250 @@ async fn existing_part_file_is_replaced_cleanly() {
     let final_path = layout.data_path_for_key(&key).expect("final path");
     let bytes = tokio::fs::read(final_path).await.expect("final bytes");
     assert_eq!(bytes, fixture.files[&key]);
+}
+
+#[tokio::test]
+async fn cli_auth_start_returns_expected_browser_login_payload() {
+    let server = CliAuthTestServer::spawn().await;
+    let client =
+        PolarisClient::new(server.base_url(), None, Duration::from_secs(5)).expect("client");
+
+    let response = client.start_cli_auth().await.expect("start auth");
+
+    assert_eq!(
+        response,
+        CliAuthStartResponse {
+            request_id: "req-123".into(),
+            poll_token: "poll-456".into(),
+            user_code: "ABCD-EFGH".into(),
+            login_url: "https://polaris.supply/login?request_id=req-123&code=ABCD-EFGH".into(),
+            expires_at: Utc.with_ymd_and_hms(2026, 6, 7, 12, 0, 0).unwrap(),
+            interval_ms: 1000,
+        }
+    );
+}
+
+#[tokio::test]
+async fn cli_auth_poll_parses_pending_approved_and_consumed_responses() {
+    let server = CliAuthTestServer::spawn().await;
+    let client =
+        PolarisClient::new(server.base_url(), None, Duration::from_secs(5)).expect("client");
+
+    let pending = client
+        .poll_cli_auth("req-123", "poll-456")
+        .await
+        .expect("pending poll");
+    assert_eq!(
+        pending,
+        CliAuthPollResponse::Pending {
+            request_id: "req-123".into(),
+            expires_at: Utc.with_ymd_and_hms(2026, 6, 7, 12, 0, 0).unwrap(),
+            interval_ms: 1000,
+        }
+    );
+
+    let approved = client
+        .poll_cli_auth("req-123", "poll-456")
+        .await
+        .expect("approved poll");
+    assert_eq!(
+        approved,
+        CliAuthPollResponse::Approved {
+            request_id: "req-123".into(),
+            user_id: "user-789".into(),
+            display_name: Some("CLI User".into()),
+            email: Some("user@example.com".into()),
+            wallet_address: Some("0xabc".into()),
+            avatar_url: Some("https://example.com/avatar.png".into()),
+            api_key: "polaris_key_cli_generated".into(),
+        }
+    );
+
+    let consumed = client
+        .poll_cli_auth("req-123", "poll-456")
+        .await
+        .expect("consumed poll");
+    assert_eq!(consumed, CliAuthPollResponse::Consumed);
+}
+
+#[tokio::test]
+async fn account_endpoint_returns_live_identity_for_api_key_sessions() {
+    let server = AccountTestServer::spawn().await;
+    let client = PolarisClient::new(
+        server.base_url(),
+        Some("polaris_key_example".into()),
+        Duration::from_secs(5),
+    )
+    .expect("client");
+
+    let account = client.fetch_account().await.expect("account");
+
+    assert_eq!(
+        account,
+        AccountResponse {
+            user_id: "user-live".into(),
+            auth: polaris::api::AccountAuth {
+                provider: "api_key".into(),
+                key_id: Some("key-live".into()),
+            },
+            identity: polaris::api::AccountIdentity {
+                display_name: Some("Live User".into()),
+                email: Some("live@example.com".into()),
+                wallet_address: Some("0xlive".into()),
+                avatar_url: Some("https://example.com/live.png".into()),
+                created_at: Some(Utc.with_ymd_and_hms(2026, 6, 7, 12, 0, 0).unwrap()),
+                updated_at: Some(Utc.with_ymd_and_hms(2026, 6, 7, 12, 5, 0).unwrap()),
+            },
+            subscription: polaris::api::AccountSubscription {
+                tier: "free".into(),
+            },
+        }
+    );
+}
+
+#[derive(Clone)]
+struct CliAuthTestServerState {
+    poll_calls: Arc<Mutex<usize>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CliAuthPollQuery {
+    request_id: String,
+    poll_token: String,
+}
+
+struct CliAuthTestServer {
+    addr: SocketAddr,
+}
+
+impl CliAuthTestServer {
+    async fn spawn() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let app = Router::new()
+            .route("/auth/cli/start", post(handle_cli_auth_start))
+            .route("/auth/cli/poll", get(handle_cli_auth_poll))
+            .with_state(CliAuthTestServerState {
+                poll_calls: Arc::new(Mutex::new(0)),
+            });
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("server");
+        });
+
+        Self { addr }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+}
+
+async fn handle_cli_auth_start() -> Response {
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "request_id": "req-123",
+            "poll_token": "poll-456",
+            "user_code": "ABCD-EFGH",
+            "login_url": "https://polaris.supply/login?request_id=req-123&code=ABCD-EFGH",
+            "expires_at": "2026-06-07T12:00:00Z",
+            "interval_ms": 1000
+        })),
+    )
+        .into_response()
+}
+
+async fn handle_cli_auth_poll(
+    State(state): State<CliAuthTestServerState>,
+    Query(query): Query<CliAuthPollQuery>,
+) -> Response {
+    assert_eq!(query.request_id, "req-123");
+    assert_eq!(query.poll_token, "poll-456");
+
+    let mut poll_calls = state.poll_calls.lock().expect("poll calls");
+    let response = match *poll_calls {
+        0 => (
+            StatusCode::OK,
+            Json(json!({
+                "status": "pending",
+                "request_id": "req-123",
+                "expires_at": "2026-06-07T12:00:00Z",
+                "interval_ms": 1000
+            })),
+        )
+            .into_response(),
+        1 => (
+            StatusCode::OK,
+            Json(json!({
+                "status": "approved",
+                "request_id": "req-123",
+                "user_id": "user-789",
+                "display_name": "CLI User",
+                "email": "user@example.com",
+                "wallet_address": "0xabc",
+                "avatar_url": "https://example.com/avatar.png",
+                "api_key": "polaris_key_cli_generated"
+            })),
+        )
+            .into_response(),
+        _ => (StatusCode::GONE, Json(json!({ "status": "consumed" }))).into_response(),
+    };
+    *poll_calls += 1;
+
+    response
+}
+
+struct AccountTestServer {
+    addr: SocketAddr,
+}
+
+impl AccountTestServer {
+    async fn spawn() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let app = Router::new().route("/account", get(handle_account));
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("server");
+        });
+
+        Self { addr }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+}
+
+async fn handle_account() -> Response {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "user_id": "user-live",
+            "auth": {
+                "provider": "api_key",
+                "key_id": "key-live"
+            },
+            "identity": {
+                "display_name": "Live User",
+                "email": "live@example.com",
+                "wallet_address": "0xlive",
+                "avatar_url": "https://example.com/live.png",
+                "created_at": "2026-06-07T12:00:00Z",
+                "updated_at": "2026-06-07T12:05:00Z"
+            },
+            "subscription": {
+                "tier": "free",
+                "events_limit": 1000,
+                "usage": { "events": 12 },
+                "started_at": "2026-06-01T00:00:00Z",
+                "expires_at": null,
+                "reset_at": "2026-07-01T00:00:00Z"
+            }
+        })),
+    )
+        .into_response()
 }
 
 #[derive(Clone)]

@@ -13,10 +13,12 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::{
-    ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView, DaySyncUpdate,
-    FileManagerTarget, RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed,
+    AccountIdentity, ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView,
+    DaySyncUpdate, FileManagerTarget, RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed,
     api_key_requirement_for_download, build_day_coverages, diff_missing_snapshot_keys,
-    format_snapshot_location, load_bookmarks, save_bookmarks, snapshot_reveal_target,
+    format_snapshot_location, load_account_identity, load_bookmarks, save_account_identity,
+    save_bookmarks,
+    snapshot_reveal_target,
 };
 use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
 use crate::config::{ApiKeySource, Config};
@@ -78,6 +80,28 @@ impl SnapshotListTestServer {
     }
 }
 
+struct AccountTestServer {
+    addr: SocketAddr,
+}
+
+impl AccountTestServer {
+    async fn spawn() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let app = Router::new().route("/account", get(handle_test_account));
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("server");
+        });
+
+        Self { addr }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+}
+
 async fn handle_test_snapshots(
     State(state): State<SnapshotListTestServerState>,
     Query(query): Query<SnapshotListQuery>,
@@ -91,6 +115,32 @@ async fn handle_test_snapshots(
         next_cursor: None,
         snapshots: state.snapshots,
     })
+}
+
+async fn handle_test_account() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "user_id": "user-live",
+        "auth": {
+            "provider": "api_key",
+            "key_id": "key-live"
+        },
+        "identity": {
+            "display_name": "Live User",
+            "email": "live@example.com",
+            "wallet_address": "0xlive",
+            "avatar_url": "https://example.com/live.png",
+            "created_at": "2026-06-07T12:00:00Z",
+            "updated_at": "2026-06-07T12:05:00Z"
+        },
+        "subscription": {
+            "tier": "free",
+            "events_limit": 1000,
+            "usage": { "events": 12 },
+            "started_at": "2026-06-01T00:00:00Z",
+            "expires_at": null,
+            "reset_at": "2026-07-01T00:00:00Z"
+        }
+    }))
 }
 
 #[test]
@@ -466,16 +516,127 @@ fn applying_runtime_config_updates_mock_account_view() {
     app.apply_runtime_config(&config);
 
     assert!(app.account_view.api_key_present);
-    assert_eq!(app.account_view.api_key_source_label, "OS credential store");
     assert_eq!(app.account_view.base_url, config.base_url);
     assert_eq!(app.account_view.root, config.root);
-    assert_eq!(app.account_view.concurrency, 8);
-    assert_eq!(app.account_view.timeout_secs, 90);
-    assert_eq!(
-        app.account_view.data_source,
-        "Mocked from https://polaris.supply/llms.txt"
+    assert_eq!(app.account_view.api_key_source_label, "stored credential");
+}
+
+#[test]
+fn applying_runtime_config_loads_persisted_account_identity_when_api_key_exists() {
+    let tempdir = tempfile::TempDir::new().expect("tempdir");
+    let runtime_root = tempdir.path().join("runtime-root");
+    let identity = AccountIdentity {
+        user_id: "user-123".into(),
+        display_name: Some("CLI User".into()),
+        email: Some("user@example.com".into()),
+        plan: Some("free".into()),
+        wallet_address: Some("0xabc".into()),
+        avatar_url: Some("https://example.com/avatar.png".into()),
+    };
+    save_account_identity(&runtime_root, &identity).expect("save identity");
+
+    let mut app = RemoteListTui::new(
+        Vec::new(),
+        Vec::<LocalSnapshotEntry>::new(),
+        tempdir.path().join("seed-root"),
+        4,
+        RemoteTuiSeed::default(),
     );
-    assert_eq!(app.account_view.login_url, "https://polaris.supply");
+    let config = Config {
+        base_url: "https://staging-api.polaris.supply".into(),
+        api_key: Some("polaris_key_example".into()),
+        api_key_source: Some(ApiKeySource::CredentialStore),
+        root: runtime_root,
+        concurrency: 8,
+        timeout: Duration::from_secs(90),
+    };
+
+    app.apply_runtime_config(&config);
+
+    assert_eq!(app.account_view.identity, Some(identity));
+}
+
+#[test]
+fn applying_runtime_config_ignores_persisted_identity_without_api_key() {
+    let tempdir = tempfile::TempDir::new().expect("tempdir");
+    let runtime_root = tempdir.path().join("runtime-root");
+    let identity = AccountIdentity {
+        user_id: "user-123".into(),
+        display_name: Some("CLI User".into()),
+        email: Some("user@example.com".into()),
+        plan: Some("free".into()),
+        wallet_address: Some("0xabc".into()),
+        avatar_url: Some("https://example.com/avatar.png".into()),
+    };
+    save_account_identity(&runtime_root, &identity).expect("save identity");
+
+    let mut app = RemoteListTui::new(
+        Vec::new(),
+        Vec::<LocalSnapshotEntry>::new(),
+        tempdir.path().join("seed-root"),
+        4,
+        RemoteTuiSeed::default(),
+    );
+    let config = Config {
+        base_url: "https://staging-api.polaris.supply".into(),
+        api_key: None,
+        api_key_source: None,
+        root: runtime_root,
+        concurrency: 8,
+        timeout: Duration::from_secs(90),
+    };
+
+    app.apply_runtime_config(&config);
+
+    assert_eq!(app.account_view.identity, None);
+}
+
+#[tokio::test]
+async fn hydrating_account_identity_uses_live_account_endpoint_and_updates_cache() {
+    let tempdir = tempfile::TempDir::new().expect("tempdir");
+    let runtime_root = tempdir.path().join("runtime-root");
+    let mut app = RemoteListTui::new(
+        Vec::new(),
+        Vec::<LocalSnapshotEntry>::new(),
+        runtime_root.clone(),
+        4,
+        RemoteTuiSeed::default(),
+    );
+    let config = Config {
+        base_url: "https://staging-api.polaris.supply".into(),
+        api_key: Some("polaris_key_example".into()),
+        api_key_source: Some(ApiKeySource::CredentialStore),
+        root: runtime_root.clone(),
+        concurrency: 4,
+        timeout: Duration::from_secs(60),
+    };
+    app.apply_runtime_config(&config);
+
+    let server = AccountTestServer::spawn().await;
+    let client = PolarisClient::new(
+        server.base_url(),
+        config.api_key.clone(),
+        Duration::from_secs(1),
+    )
+    .expect("client");
+
+    app.hydrate_account_identity(&client)
+        .await
+        .expect("hydrate identity");
+
+    let expected = AccountIdentity {
+        user_id: "user-live".into(),
+        display_name: Some("Live User".into()),
+        email: Some("live@example.com".into()),
+        plan: Some("free".into()),
+        wallet_address: Some("0xlive".into()),
+        avatar_url: Some("https://example.com/live.png".into()),
+    };
+    assert_eq!(app.account_view.identity, Some(expected.clone()));
+    assert_eq!(
+        load_account_identity(&runtime_root).expect("load identity"),
+        Some(expected)
+    );
 }
 
 #[test]

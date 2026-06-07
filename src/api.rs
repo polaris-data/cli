@@ -15,6 +15,66 @@ pub struct PolarisClient {
     download_client: Client,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct CliAuthStartResponse {
+    pub request_id: String,
+    pub poll_token: String,
+    pub user_code: String,
+    pub login_url: String,
+    pub expires_at: DateTime<Utc>,
+    pub interval_ms: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum CliAuthPollResponse {
+    Pending {
+        request_id: String,
+        expires_at: DateTime<Utc>,
+        interval_ms: u64,
+    },
+    Approved {
+        request_id: String,
+        user_id: String,
+        display_name: Option<String>,
+        email: Option<String>,
+        wallet_address: Option<String>,
+        avatar_url: Option<String>,
+        api_key: String,
+    },
+    Consumed,
+    Expired,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct AccountResponse {
+    pub user_id: String,
+    pub auth: AccountAuth,
+    pub identity: AccountIdentity,
+    pub subscription: AccountSubscription,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct AccountAuth {
+    pub provider: String,
+    pub key_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct AccountIdentity {
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+    pub wallet_address: Option<String>,
+    pub avatar_url: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct AccountSubscription {
+    pub tier: String,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CatalogResponse {
     pub exchanges: Vec<CatalogExchange>,
@@ -211,6 +271,59 @@ impl PolarisClient {
         self.api_key.is_some()
     }
 
+    pub async fn start_cli_auth(&self) -> Result<CliAuthStartResponse> {
+        let url = format!("{}/auth/cli/start", self.base_url);
+        let response = self
+            .api_client
+            .post(url)
+            .send()
+            .await
+            .context("CLI auth start request failed")
+            .map_err(TickError::Other)?;
+        decode_json_response(response, "CLI auth start request failed").await
+    }
+
+    pub async fn fetch_account(&self) -> Result<AccountResponse> {
+        let url = format!("{}/account", self.base_url);
+        let request = self.api_client.get(url);
+        self.send_json(request, "account request failed").await
+    }
+
+    pub async fn poll_cli_auth(
+        &self,
+        request_id: &str,
+        poll_token: &str,
+    ) -> Result<CliAuthPollResponse> {
+        let url = format!("{}/auth/cli/poll", self.base_url);
+        let response = self
+            .api_client
+            .get(url)
+            .query(&[("request_id", request_id), ("poll_token", poll_token)])
+            .send()
+            .await
+            .context("CLI auth poll request failed")
+            .map_err(TickError::Other)?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .context("CLI auth poll request failed")
+            .map_err(TickError::Other)?;
+
+        if !(status.is_success() || status == StatusCode::GONE) {
+            return Err(http_error(status, body, "CLI auth poll request failed"));
+        }
+
+        serde_json::from_str::<CliAuthPollResponse>(&body)
+            .with_context(|| {
+                format!(
+                    "CLI auth poll request failed: failed to decode JSON response: {}",
+                    body_snippet(&body)
+                )
+            })
+            .map_err(TickError::Other)
+    }
+
     pub async fn fetch_catalog(
         &self,
         exchange: Option<&str>,
@@ -340,25 +453,32 @@ impl PolarisClient {
             .await
             .with_context(|| context.to_string())
             .map_err(TickError::Other)?;
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(http_error(status, body, context));
-        }
-        let body = response
-            .text()
-            .await
-            .with_context(|| context.to_string())
-            .map_err(TickError::Other)?;
-        serde_json::from_str::<T>(&body)
-            .with_context(|| {
-                format!(
-                    "{context}: failed to decode JSON response: {}",
-                    body_snippet(&body)
-                )
-            })
-            .map_err(TickError::Other)
+        decode_json_response(response, context).await
     }
+}
+
+async fn decode_json_response<T>(response: reqwest::Response, context: &str) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(http_error(status, body, context));
+    }
+    let body = response
+        .text()
+        .await
+        .with_context(|| context.to_string())
+        .map_err(TickError::Other)?;
+    serde_json::from_str::<T>(&body)
+        .with_context(|| {
+            format!(
+                "{context}: failed to decode JSON response: {}",
+                body_snippet(&body)
+            )
+        })
+        .map_err(TickError::Other)
 }
 
 fn body_snippet(body: &str) -> String {
