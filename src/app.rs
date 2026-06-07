@@ -84,7 +84,7 @@ fn run_account_set_key() -> Result<u8> {
 
     let store = KeychainCredentialStore::new()?;
     store.set_api_key(&api_key)?;
-    println!("Stored Polaris API key in the OS credential store.");
+    println!("Stored Polaris API key in persistent credential storage.");
     Ok(0)
 }
 
@@ -92,7 +92,7 @@ fn run_account_status() -> Result<u8> {
     let config = Config::from_env()?;
     let status = match config.api_key_source {
         Some(ApiKeySource::Environment) => "configured via POLARIS_API_KEY",
-        Some(ApiKeySource::CredentialStore) => "configured via OS credential store",
+        Some(ApiKeySource::CredentialStore) => "configured via stored credential",
         None => "not configured",
     };
     println!("Polaris account status: {status}");
