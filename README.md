@@ -35,10 +35,24 @@ Install the latest GitHub release:
 curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash
 ```
 
+Install via the Polaris Homebrew tap:
+
+```bash
+brew tap polaris-data/tap
+brew install polaris-data/tap/polaris
+```
+
 Update later by re-running the same command, or from the installed CLI:
 
 ```bash
 polaris update
+```
+
+If you installed Polaris with Homebrew, update it with:
+
+```bash
+brew update
+brew upgrade polaris-data/tap/polaris
 ```
 
 Install a pinned version:
@@ -75,6 +89,7 @@ Supported prebuilt release targets:
 
 Compatibility notes:
 
+- Homebrew installs use the custom tap `polaris-data/tap`
 - If `~/.tick/bin` already exists, the installer reuses that legacy install directory
 - The installer also creates a `tick` symlink pointing at `polaris`
 
@@ -84,6 +99,13 @@ Compatibility notes:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash
+```
+
+Or with Homebrew:
+
+```bash
+brew tap polaris-data/tap
+brew install polaris-data/tap/polaris
 ```
 
 ### 2. Configure access
