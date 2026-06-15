@@ -1,9 +1,7 @@
 ![Polaris header](assets/polaris-header.png)
 
 <p align="center">
-  <a href="#installation">Installation</a> |
-  <a href="#quick-start">Quick Start</a> |
-  <a href="#common-workflows">Common Workflows</a> |
+  <a href="#quickstart">Quickstart</a> |
   <a href="#cli-overview">CLI Overview</a> |
   <a href="#command-reference">Command Reference</a> |
   <a href="#configuration">Configuration</a>
@@ -21,79 +19,7 @@
 
 ![Polaris product screenshot](assets/polaris-product-screen.png)
 
-## Requirements
-
-- Rust toolchain with `cargo` for local development
-- Network access to the Polaris API
-- Optional: a Polaris API key for authenticated Polaris access
-
-## Installation
-
-Install the latest GitHub release:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash
-```
-
-Install via the Polaris Homebrew tap:
-
-```bash
-brew tap polaris-data/tap
-brew install polaris-data/tap/polaris
-```
-
-Update later by re-running the same command, or from the installed CLI:
-
-```bash
-polaris update
-```
-
-If you installed Polaris with Homebrew, update it with:
-
-```bash
-brew update
-brew upgrade polaris-data/tap/polaris
-```
-
-Install a pinned version:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --version v0.2.1
-```
-
-Install into a custom directory:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --install-dir "$HOME/.local/bin"
-```
-
-Default install location for new installs:
-
-```text
-~/.polaris/bin/polaris
-```
-
-The installer adds the install directory to your shell profile if needed:
-
-- zsh: `~/.zshenv` or `$ZDOTDIR/.zshenv`
-- bash: `~/.bashrc`
-- fish: `~/.config/fish/config.fish`
-- ash and fallback shells: `~/.profile`
-
-Supported prebuilt release targets:
-
-- macOS `x86_64`
-- macOS Apple Silicon
-- Linux `x86_64`
-- Linux `aarch64`
-
-Compatibility notes:
-
-- Homebrew installs use the custom tap `polaris-data/tap`
-- If `~/.tick/bin` already exists, the installer reuses that legacy install directory
-- The installer also creates a `tick` symlink pointing at `polaris`
-
-## Quick Start
+## Quickstart
 
 ### 1. Install Polaris
 
@@ -108,7 +34,37 @@ brew tap polaris-data/tap
 brew install polaris-data/tap/polaris
 ```
 
-### 2. Configure access
+### 2. Browse via TUI
+
+```bash
+polaris
+```
+
+### 3. Browse remote datasets
+
+```bash
+polaris list --exchange hyperliquid --asset BTCUSDT
+```
+
+### 4. Sync one time range
+
+```bash
+polaris sync \
+  --exchange hyperliquid \
+  --asset BTCUSDT \
+  --from 2026-06-01T00:00:00Z \
+  --to 2026-06-02T00:00:00Z
+```
+
+### 5. Inspect local data
+
+```bash
+polaris list local --exchange hyperliquid --asset BTCUSDT
+```
+
+After sync completes, Polaris stores the fetched snapshot files under its managed local root.
+
+### 6. Optional: Add an API key for more datasets
 
 If you have an API key, store it in the OS credential store:
 
@@ -128,75 +84,6 @@ Check whether Polaris sees a configured credential:
 polaris account status
 ```
 
-### 3. Browse remote datasets
-
-```bash
-polaris list --exchange aster --asset BTCUSDT
-```
-
-### 4. Sync one time range
-
-```bash
-polaris sync \
-  --exchange aster \
-  --asset BTCUSDT \
-  --from 2026-06-01T00:00:00Z \
-  --to 2026-06-02T00:00:00Z
-```
-
-### 5. Inspect local data
-
-```bash
-polaris list local --exchange aster --asset BTCUSDT
-```
-
-After sync completes, Polaris stores the fetched snapshot files under its managed local root.
-
-## Common Workflows
-
-### Browse datasets interactively
-
-Run bare `polaris` in a real terminal to open the remote dataset browser TUI. If stdin or stdout is not a terminal, Polaris falls back to plain CLI output.
-
-```bash
-polaris
-```
-
-### Search remote datasets from the CLI
-
-```bash
-polaris list --search btc --limit 25
-polaris list --exchange aster --asset BTCUSDT --json
-```
-
-### Sync data for scripts and pipelines
-
-```bash
-polaris sync \
-  --exchange aster \
-  --asset BTCUSDT \
-  --from 2026-06-01T00:00:00Z \
-  --to 2026-06-02T00:00:00Z \
-  --json \
-  --concurrency 8
-```
-
-### Inspect what already exists locally
-
-```bash
-polaris list local --json
-polaris list local --exchange aster --asset BTCUSDT --date 2026-06-01
-```
-
-### Reset local managed state
-
-```bash
-polaris reset
-polaris reset --json
-```
-
-`reset` removes the local dataset state managed by Polaris under the configured root. It clears `data/`, `tmp/`, and `cache/`, but leaves the root directory and account credentials intact.
-
 ## CLI Overview
 
 ```text
@@ -215,25 +102,6 @@ Top-level help:
 
 ```bash
 polaris --help
-```
-
-Development entrypoints:
-
-```bash
-cargo run -- --help
-cargo run --
-cargo run -- list
-cargo run -- list local
-```
-
-Build binaries directly:
-
-```bash
-cargo build
-./target/debug/polaris
-
-cargo build --release
-./target/release/polaris
 ```
 
 ## Command Reference
