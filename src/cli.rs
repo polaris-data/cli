@@ -16,9 +16,10 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Account,
+    Catalog(RemoteListArgs),
     Key,
     Login,
-    List(ListCommand),
+    List(LocalListArgs),
     Reset(ResetArgs),
     Sync(SyncArgs),
     Update(UpdateArgs),
@@ -65,19 +66,6 @@ pub struct LocalListArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct ListCommand {
-    #[command(subcommand)]
-    pub subcommand: Option<ListSubcommand>,
-    #[command(flatten)]
-    pub remote: RemoteListArgs,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum ListSubcommand {
-    Local(LocalListArgs),
-}
-
-#[derive(Debug, Clone, Args)]
 pub struct SyncArgs {
     #[command(flatten)]
     pub dataset: DatasetArgs,
@@ -121,6 +109,18 @@ mod tests {
     fn key_command_parses() {
         let cli = Cli::try_parse_from(["polaris", "key"]).expect("cli");
         assert!(matches!(cli.command, Some(Command::Key)));
+    }
+
+    #[test]
+    fn catalog_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "catalog"]).expect("cli");
+        assert!(matches!(cli.command, Some(Command::Catalog(_))));
+    }
+
+    #[test]
+    fn list_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "list"]).expect("cli");
+        assert!(matches!(cli.command, Some(Command::List(_))));
     }
 
     #[test]

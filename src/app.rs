@@ -14,8 +14,7 @@ use tracing_subscriber::EnvFilter;
 use crate::api::{CatalogExchange, CliAuthPollResponse, PolarisClient};
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::cli::{
-    Cli, Command, DatasetArgs, ListCommand, ListSubcommand,
-    LocalListArgs, RemoteListArgs, ResetArgs, SyncArgs, UpdateArgs,
+    Cli, Command, DatasetArgs, LocalListArgs, RemoteListArgs, ResetArgs, SyncArgs, UpdateArgs,
 };
 use crate::config::{ApiKeySource, Config};
 use crate::error::{Result, TickError};
@@ -44,11 +43,20 @@ pub async fn main_entry() -> ExitCode {
 pub async fn run(cli: Cli) -> Result<u8> {
     match cli.command {
         Some(Command::Account) => run_account().await,
+        Some(Command::Catalog(args)) => {
+            let config = Config::from_env()?;
+            let client = PolarisClient::new(
+                config.base_url.clone(),
+                config.api_key.clone(),
+                config.timeout,
+            )?;
+            run_catalog(&config, &client, args, false).await
+        }
         Some(Command::Key) => run_key(),
         Some(Command::Login) => run_login().await,
         Some(Command::List(args)) => {
             let config = Config::from_env()?;
-            run_list(&config, args).await
+            run_list(&config, args)
         }
         Some(Command::Reset(args)) => {
             let config = Config::from_env()?;
@@ -375,24 +383,21 @@ async fn run_browser(config: &Config) -> Result<u8> {
         limit: usize::MAX,
         json: false,
     };
-    run_list_remote(config, &client, args, true).await
+    run_catalog(config, &client, args, true).await
 }
 
-async fn run_list(config: &Config, args: ListCommand) -> Result<u8> {
-    match args.subcommand {
-        Some(ListSubcommand::Local(local)) => run_list_local(config, local),
-        None => {
-            let client = PolarisClient::new(
-                config.base_url.clone(),
-                config.api_key.clone(),
-                config.timeout,
-            )?;
-            run_list_remote(config, &client, args.remote, false).await
-        }
-    }
+fn run_list(config: &Config, args: LocalListArgs) -> Result<u8> {
+    let layout = Layout::new(config.root.clone());
+    let entries = layout.list_local_snapshots()?;
+    let filters = LocalListFilters::from_args(&args);
+    let entries = filter_local_list_entries(entries, &filters);
+    let output =
+        LocalListOutput::from_entries(layout.root().display().to_string(), filters, entries);
+    emit_output(args.json, &output)?;
+    Ok(0)
 }
 
-async fn run_list_remote(
+async fn run_catalog(
     config: &Config,
     client: &PolarisClient,
     args: RemoteListArgs,
@@ -428,17 +433,6 @@ async fn run_list_remote(
         )
         .await?;
     }
-    Ok(0)
-}
-
-fn run_list_local(config: &Config, args: LocalListArgs) -> Result<u8> {
-    let layout = Layout::new(config.root.clone());
-    let entries = layout.list_local_snapshots()?;
-    let filters = LocalListFilters::from_args(&args);
-    let entries = filter_local_list_entries(entries, &filters);
-    let output =
-        LocalListOutput::from_entries(layout.root().display().to_string(), filters, entries);
-    emit_output(args.json, &output)?;
     Ok(0)
 }
 
@@ -555,7 +549,7 @@ struct RemoteListOutput {
 impl RemoteListOutput {
     fn from_entries(filters: RemoteListFilters, datasets: Vec<RemoteDatasetEntry>) -> Self {
         Self {
-            command: "list",
+            command: "catalog",
             filters,
             dataset_total: datasets.len(),
             datasets,
@@ -565,7 +559,7 @@ impl RemoteListOutput {
 
 impl HumanOutput for RemoteListOutput {
     fn render_human(&self) -> String {
-        let mut lines = vec!["list".to_string()];
+        let mut lines = vec!["catalog".to_string()];
 
         if self.filters.exchange.is_some()
             || self.filters.asset.is_some()
@@ -647,7 +641,7 @@ impl LocalListOutput {
         snapshots: Vec<LocalSnapshotEntry>,
     ) -> Self {
         Self {
-            command: "list local",
+            command: "list",
             root,
             filters,
             snapshot_total: snapshots.len(),
@@ -658,7 +652,7 @@ impl LocalListOutput {
 
 impl HumanOutput for LocalListOutput {
     fn render_human(&self) -> String {
-        let mut lines = vec!["list local".to_string(), format!("root: {}", self.root)];
+        let mut lines = vec!["list".to_string(), format!("root: {}", self.root)];
 
         if self.filters.exchange.is_some()
             || self.filters.asset.is_some()
@@ -863,7 +857,7 @@ mod tests {
     #[test]
     fn remote_list_json_shape_is_stable() {
         let output = RemoteListOutput {
-            command: "list",
+            command: "catalog",
             filters: RemoteListFilters {
                 exchange: Some("aster".into()),
                 asset: Some("BTCUSDT".into()),
@@ -887,14 +881,14 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"list\",\"filters\":{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"search\":\"btc\"},\"dataset_total\":1,\"datasets\":[{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\",\"source\":\"manifest\",\"access\":{\"status\":\"preview\",\"public_cutoff_date\":\"2026-05-28\"},\"dataset\":\"aster:BTCUSDT\"}]}"
+            "{\"command\":\"catalog\",\"filters\":{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"search\":\"btc\"},\"dataset_total\":1,\"datasets\":[{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\",\"source\":\"manifest\",\"access\":{\"status\":\"preview\",\"public_cutoff_date\":\"2026-05-28\"},\"dataset\":\"aster:BTCUSDT\"}]}"
         );
     }
 
     #[test]
     fn local_list_json_shape_is_stable() {
         let output = LocalListOutput {
-            command: "list local",
+            command: "list",
             root: "/tmp/polaris".into(),
             filters: LocalListFilters {
                 exchange: Some("aster".into()),
@@ -916,7 +910,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"list local\",\"root\":\"/tmp/polaris\",\"filters\":{\"exchange\":\"aster\",\"asset\":null,\"date\":null},\"snapshot_total\":1,\"snapshots\":[{\"key\":\"bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"path\":\"/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"filename\":\"file.jsonl.zst\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"date\":\"2026-06-01\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\"}]}"
+            "{\"command\":\"list\",\"root\":\"/tmp/polaris\",\"filters\":{\"exchange\":\"aster\",\"asset\":null,\"date\":null},\"snapshot_total\":1,\"snapshots\":[{\"key\":\"bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"path\":\"/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"filename\":\"file.jsonl.zst\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"date\":\"2026-06-01\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\"}]}"
         );
     }
 

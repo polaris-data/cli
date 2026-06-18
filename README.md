@@ -43,7 +43,7 @@ polaris
 ### 3. Browse remote datasets
 
 ```bash
-polaris list --exchange hyperliquid --asset BTCUSDT
+polaris catalog --exchange hyperliquid --asset BTCUSDT
 ```
 
 ### 4. Sync one time range
@@ -59,7 +59,7 @@ polaris sync \
 ### 5. Inspect local data
 
 ```bash
-polaris list local --exchange hyperliquid --asset BTCUSDT
+polaris list --exchange hyperliquid --asset BTCUSDT
 ```
 
 After sync completes, Polaris stores the fetched snapshot files under its managed local root.
@@ -95,10 +95,10 @@ polaris account
 ```text
 polaris
 ├── account
+├── catalog
 ├── key
 ├── login
 ├── list
-│   └── local
 ├── reset
 ├── sync
 └── update
@@ -140,26 +140,26 @@ Prints the current Polaris auth state, credential source, and live account detai
 polaris account
 ```
 
-### `polaris list`
+### `polaris catalog`
 
 Lists remote datasets available from Polaris.
 
 ```bash
-polaris list --json
+polaris catalog --json
 
-polaris list \
+polaris catalog \
   --exchange aster \
   --asset BTCUSDT \
   --search btc \
   --limit 25
 ```
 
-### `polaris list local`
+### `polaris list`
 
 Lists local snapshots under the configured root.
 
 ```bash
-polaris list local --json
+polaris list --json
 ```
 
 ### `polaris sync`
@@ -226,8 +226,8 @@ export POLARIS_ROOT="$HOME/.local/share/polaris-dev"
 export POLARIS_CONCURRENCY="8"
 export POLARIS_TIMEOUT_SECS="60"
 
+polaris catalog
 polaris list
-polaris list local
 polaris sync --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z
 ```
 
@@ -242,16 +242,16 @@ Use `--json` when you want structured output for scripts or agents.
 
 Commands with `--json` support:
 
+- `polaris catalog`
 - `polaris list`
-- `polaris list local`
 - `polaris sync`
 - `polaris reset`
 
 Examples:
 
 ```bash
+polaris catalog --json
 polaris list --json
-polaris list local --json
 polaris sync --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z --json
 polaris reset --json
 ```
