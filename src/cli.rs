@@ -6,7 +6,7 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "polaris",
     version,
-    about = "Sync Polaris market data snapshots"
+    about = "Download Polaris market data snapshots"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -20,8 +20,8 @@ pub enum Command {
     Key,
     Login,
     List(LocalListArgs),
+    Download(DownloadArgs),
     Reset(ResetArgs),
-    Sync(SyncArgs),
     Update(UpdateArgs),
 }
 
@@ -66,7 +66,7 @@ pub struct LocalListArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct SyncArgs {
+pub struct DownloadArgs {
     #[command(flatten)]
     pub dataset: DatasetArgs,
     #[arg(long)]
@@ -121,6 +121,24 @@ mod tests {
     fn list_command_parses() {
         let cli = Cli::try_parse_from(["polaris", "list"]).expect("cli");
         assert!(matches!(cli.command, Some(Command::List(_))));
+    }
+
+    #[test]
+    fn download_command_parses() {
+        let cli = Cli::try_parse_from([
+            "polaris",
+            "download",
+            "--exchange",
+            "aster",
+            "--asset",
+            "BTCUSDT",
+            "--from",
+            "2026-06-01T00:00:00Z",
+            "--to",
+            "2026-06-02T00:00:00Z",
+        ])
+        .expect("cli");
+        assert!(matches!(cli.command, Some(Command::Download(_))));
     }
 
     #[test]

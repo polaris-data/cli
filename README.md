@@ -46,10 +46,10 @@ polaris
 polaris catalog --exchange hyperliquid --asset BTCUSDT
 ```
 
-### 4. Sync one time range
+### 4. Download one time range
 
 ```bash
-polaris sync \
+polaris download \
   --exchange hyperliquid \
   --asset BTCUSDT \
   --from 2026-06-01T00:00:00Z \
@@ -62,7 +62,7 @@ polaris sync \
 polaris list --exchange hyperliquid --asset BTCUSDT
 ```
 
-After sync completes, Polaris stores the fetched snapshot files under its managed local root.
+After download completes, Polaris stores the fetched snapshot files under its managed local root.
 
 ### 6. Optional: Sign in for more datasets
 
@@ -99,8 +99,8 @@ polaris
 ├── key
 ├── login
 ├── list
+├── download
 ├── reset
-├── sync
 └── update
 ```
 
@@ -162,19 +162,19 @@ Lists local snapshots under the configured root.
 polaris list --json
 ```
 
-### `polaris sync`
+### `polaris download`
 
-Downloads missing snapshots for the requested dataset and time range.
+Downloads missing snapshots for the requested dataset and time range. Existing complete local files are reused and not downloaded again.
 
-After sync completes, the fetched snapshots are stored under `data/` within the configured local root.
+After download completes, the fetched snapshots are stored under `data/` within the configured local root.
 ```bash
-polaris sync \
+polaris download \
   --exchange aster \
   --asset BTCUSDT \
   --from 2026-06-01T00:00:00Z \
   --to 2026-06-02T00:00:00Z
 
-polaris sync \
+polaris download \
   --exchange aster \
   --asset BTCUSDT \
   --from 2026-06-01T00:00:00Z \
@@ -213,7 +213,7 @@ polaris update --install-dir "$HOME/.local/bin"
 | `POLARIS_BASE_URL` | `https://api.polaris.supply` | Base URL for Polaris API requests |
 | `POLARIS_API_KEY` | unset | Optional bearer token for authenticated Polaris requests |
 | `POLARIS_ROOT` | platform app-data directory | Override the local dataset root directory |
-| `POLARIS_CONCURRENCY` | unset | Default sync concurrency when `--concurrency` is not provided |
+| `POLARIS_CONCURRENCY` | unset | Default download concurrency when `--concurrency` is not provided |
 | `POLARIS_TIMEOUT_SECS` | unset | Request timeout in seconds |
 
 `POLARIS_API_KEY` takes precedence over the stored credential saved by `polaris login` or `polaris key`.
@@ -228,7 +228,7 @@ export POLARIS_TIMEOUT_SECS="60"
 
 polaris catalog
 polaris list
-polaris sync --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z
+polaris download --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z
 ```
 
 Compatibility notes:
@@ -244,7 +244,7 @@ Commands with `--json` support:
 
 - `polaris catalog`
 - `polaris list`
-- `polaris sync`
+- `polaris download`
 - `polaris reset`
 
 Examples:
@@ -252,7 +252,7 @@ Examples:
 ```bash
 polaris catalog --json
 polaris list --json
-polaris sync --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z --json
+polaris download --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z --json
 polaris reset --json
 ```
 
@@ -276,7 +276,7 @@ Within that root, Polaris owns this layout:
 ```
 
 - `data/` stores snapshot files fetched from Polaris
-- `tmp/` stores temporary sync state
+- `tmp/` stores temporary download state
 - `cache/` stores local cache state used by the CLI
 
 Compatibility note:

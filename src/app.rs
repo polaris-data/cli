@@ -14,7 +14,7 @@ use tracing_subscriber::EnvFilter;
 use crate::api::{CatalogExchange, CliAuthPollResponse, PolarisClient};
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::cli::{
-    Cli, Command, DatasetArgs, LocalListArgs, RemoteListArgs, ResetArgs, SyncArgs, UpdateArgs,
+    Cli, Command, DatasetArgs, DownloadArgs, LocalListArgs, RemoteListArgs, ResetArgs, UpdateArgs,
 };
 use crate::config::{ApiKeySource, Config};
 use crate::error::{Result, TickError};
@@ -58,18 +58,18 @@ pub async fn run(cli: Cli) -> Result<u8> {
             let config = Config::from_env()?;
             run_list(&config, args)
         }
-        Some(Command::Reset(args)) => {
-            let config = Config::from_env()?;
-            run_reset(&config, args).await
-        }
-        Some(Command::Sync(args)) => {
+        Some(Command::Download(args)) => {
             let config = Config::from_env()?;
             let client = PolarisClient::new(
                 config.base_url.clone(),
                 config.api_key.clone(),
                 config.timeout,
             )?;
-            run_sync(&config, &client, args).await
+            run_download(&config, &client, args).await
+        }
+        Some(Command::Reset(args)) => {
+            let config = Config::from_env()?;
+            run_reset(&config, args).await
         }
         Some(Command::Update(args)) => run_update(args).await,
         None => {
@@ -464,7 +464,7 @@ async fn run_reset(config: &Config, args: ResetArgs) -> Result<u8> {
     Ok(0)
 }
 
-async fn run_sync(config: &Config, client: &PolarisClient, args: SyncArgs) -> Result<u8> {
+async fn run_download(config: &Config, client: &PolarisClient, args: DownloadArgs) -> Result<u8> {
     let layout = layout_for_root(config.root.clone());
     let _guard = acquire_sync_lock(&layout)?;
 
@@ -773,7 +773,7 @@ struct ResetOutput {
 impl SyncOutput {
     fn from_parts(plan: &SyncPlan, execution: SyncExecution) -> Self {
         Self {
-            command: "sync",
+            command: "download",
             exchange: plan.exchange.clone(),
             asset: plan.asset.clone(),
             requested_range: plan.requested_range.clone(),
@@ -792,7 +792,7 @@ impl SyncOutput {
 impl HumanOutput for SyncOutput {
     fn render_human(&self) -> String {
         let mut lines = vec![
-            format!("sync {} {}", self.exchange, self.asset),
+            format!("download {} {}", self.exchange, self.asset),
             format!("root: {}", self.root),
             format!(
                 "requested: {} -> {}",
@@ -1064,7 +1064,7 @@ mod tests {
     #[test]
     fn sync_json_shape_is_stable() {
         let output = SyncOutput {
-            command: "sync",
+            command: "download",
             exchange: "aster".into(),
             asset: "BTCUSDT".into(),
             requested_range: TimeWindow {
@@ -1089,7 +1089,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"sync\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/polaris\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
+            "{\"command\":\"download\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/polaris\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
         );
     }
 
