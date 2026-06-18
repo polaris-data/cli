@@ -6,7 +6,7 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "polaris",
     version,
-    about = "Sync Polaris market data snapshots"
+    about = "Download Polaris market data snapshots"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -15,23 +15,14 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Account(AccountCommand),
-    List(ListCommand),
+    Account,
+    Catalog(RemoteListArgs),
+    Key,
+    Login,
+    List(LocalListArgs),
+    Download(DownloadArgs),
     Reset(ResetArgs),
-    Sync(SyncArgs),
     Update(UpdateArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct AccountCommand {
-    #[command(subcommand)]
-    pub subcommand: AccountSubcommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum AccountSubcommand {
-    SetKey,
-    Status,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -75,20 +66,7 @@ pub struct LocalListArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct ListCommand {
-    #[command(subcommand)]
-    pub subcommand: Option<ListSubcommand>,
-    #[command(flatten)]
-    pub remote: RemoteListArgs,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum ListSubcommand {
-    Local(LocalListArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct SyncArgs {
+pub struct DownloadArgs {
     #[command(flatten)]
     pub dataset: DatasetArgs,
     #[arg(long)]
@@ -116,12 +94,60 @@ mod tests {
     use super::{Cli, Command};
 
     #[test]
+    fn account_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "account"]).expect("cli");
+        assert!(matches!(cli.command, Some(Command::Account)));
+    }
+
+    #[test]
+    fn login_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "login"]).expect("cli");
+        assert!(matches!(cli.command, Some(Command::Login)));
+    }
+
+    #[test]
+    fn key_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "key"]).expect("cli");
+        assert!(matches!(cli.command, Some(Command::Key)));
+    }
+
+    #[test]
+    fn catalog_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "catalog"]).expect("cli");
+        assert!(matches!(cli.command, Some(Command::Catalog(_))));
+    }
+
+    #[test]
+    fn list_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "list"]).expect("cli");
+        assert!(matches!(cli.command, Some(Command::List(_))));
+    }
+
+    #[test]
+    fn download_command_parses() {
+        let cli = Cli::try_parse_from([
+            "polaris",
+            "download",
+            "--exchange",
+            "aster",
+            "--asset",
+            "BTCUSDT",
+            "--from",
+            "2026-06-01T00:00:00Z",
+            "--to",
+            "2026-06-02T00:00:00Z",
+        ])
+        .expect("cli");
+        assert!(matches!(cli.command, Some(Command::Download(_))));
+    }
+
+    #[test]
     fn update_command_parses_with_optional_overrides() {
         let cli = Cli::try_parse_from([
             "polaris",
             "update",
             "--version",
-            "v0.3.0",
+            "v0.4.0",
             "--install-dir",
             "/tmp/polaris",
         ])
@@ -129,7 +155,7 @@ mod tests {
 
         match cli.command {
             Some(Command::Update(args)) => {
-                assert_eq!(args.version.as_deref(), Some("v0.3.0"));
+                assert_eq!(args.version.as_deref(), Some("v0.4.0"));
                 assert_eq!(
                     args.install_dir.as_deref(),
                     Some(std::path::Path::new("/tmp/polaris"))

@@ -267,10 +267,7 @@ fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     );
 }
 
-fn render_account_view(
-    frame: &mut ratatui::Frame<'_>,
-    app: &RemoteListTui,
-) {
+fn render_account_view(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
     let account = &app.account_view;
     let area = centered_rect(90, 24, frame.area());
 

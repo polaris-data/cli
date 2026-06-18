@@ -8,23 +8,25 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use rpassword::prompt_password;
 use serde::Serialize;
+use tokio::time::{Duration as TokioDuration, sleep};
 use tracing_subscriber::EnvFilter;
 
-use crate::api::{CatalogExchange, PolarisClient};
+use crate::api::{CatalogExchange, CliAuthPollResponse, PolarisClient};
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::cli::{
-    AccountCommand, AccountSubcommand, Cli, Command, DatasetArgs, ListCommand, ListSubcommand,
-    LocalListArgs, RemoteListArgs, ResetArgs, SyncArgs, UpdateArgs,
+    Cli, Command, DatasetArgs, DownloadArgs, LocalListArgs, RemoteListArgs, ResetArgs, UpdateArgs,
 };
 use crate::config::{ApiKeySource, Config};
 use crate::error::{Result, TickError};
 use crate::layout::{Layout, LocalSnapshotEntry};
 use crate::planner::{SyncPlan, TimeWindow, build_sync_plan};
 use crate::syncer::{SyncExecution, acquire_sync_lock, execute_sync, layout_for_root};
+use crate::tui::open_url;
 use crate::tui::{RemoteDatasetEntry, RemoteTuiSeed, can_render_tui, run_remote_list_tui};
 
 const UPDATE_INSTALLER_URL: &str =
     "https://raw.githubusercontent.com/polaris-data/cli/main/install.sh";
+const MIN_CLI_AUTH_POLL_INTERVAL_MS: u64 = 250;
 
 pub async fn main_entry() -> ExitCode {
     init_tracing();
@@ -40,23 +42,34 @@ pub async fn main_entry() -> ExitCode {
 
 pub async fn run(cli: Cli) -> Result<u8> {
     match cli.command {
-        Some(Command::Account(args)) => run_account(args),
-        Some(Command::List(args)) => {
-            let config = Config::from_env()?;
-            run_list(&config, args).await
-        }
-        Some(Command::Reset(args)) => {
-            let config = Config::from_env()?;
-            run_reset(&config, args).await
-        }
-        Some(Command::Sync(args)) => {
+        Some(Command::Account) => run_account().await,
+        Some(Command::Catalog(args)) => {
             let config = Config::from_env()?;
             let client = PolarisClient::new(
                 config.base_url.clone(),
                 config.api_key.clone(),
                 config.timeout,
             )?;
-            run_sync(&config, &client, args).await
+            run_catalog(&config, &client, args, false).await
+        }
+        Some(Command::Key) => run_key(),
+        Some(Command::Login) => run_login().await,
+        Some(Command::List(args)) => {
+            let config = Config::from_env()?;
+            run_list(&config, args)
+        }
+        Some(Command::Download(args)) => {
+            let config = Config::from_env()?;
+            let client = PolarisClient::new(
+                config.base_url.clone(),
+                config.api_key.clone(),
+                config.timeout,
+            )?;
+            run_download(&config, &client, args).await
+        }
+        Some(Command::Reset(args)) => {
+            let config = Config::from_env()?;
+            run_reset(&config, args).await
         }
         Some(Command::Update(args)) => run_update(args).await,
         None => {
@@ -66,14 +79,7 @@ pub async fn run(cli: Cli) -> Result<u8> {
     }
 }
 
-fn run_account(args: AccountCommand) -> Result<u8> {
-    match args.subcommand {
-        AccountSubcommand::SetKey => run_account_set_key(),
-        AccountSubcommand::Status => run_account_status(),
-    }
-}
-
-fn run_account_set_key() -> Result<u8> {
+fn run_key() -> Result<u8> {
     let api_key = prompt_password("Polaris API key: ")
         .context("failed to read API key from terminal")
         .map_err(TickError::Other)?;
@@ -88,16 +94,110 @@ fn run_account_set_key() -> Result<u8> {
     Ok(0)
 }
 
-fn run_account_status() -> Result<u8> {
+async fn run_account() -> Result<u8> {
     let config = Config::from_env()?;
-    let status = match config.api_key_source {
+    let auth_source = match config.api_key_source {
         Some(ApiKeySource::Environment) => "configured via POLARIS_API_KEY",
         Some(ApiKeySource::CredentialStore) => "configured via stored credential",
         None => "not configured",
     };
-    println!("Polaris account status: {status}");
+    println!("Polaris account");
     println!("Base URL: {}", config.base_url);
+    println!("Auth: {auth_source}");
+    if config.api_key.is_none() {
+        println!("Status: not signed in");
+        println!("Run `polaris login` to sign in.");
+        return Ok(0);
+    }
+
+    let client = PolarisClient::new(
+        config.base_url.clone(),
+        config.api_key.clone(),
+        config.timeout,
+    )?;
+    let account = client.fetch_account().await?;
+    let display_name = account
+        .identity
+        .display_name
+        .as_deref()
+        .or(account.identity.email.as_deref())
+        .unwrap_or(account.user_id.as_str());
+    println!("Status: signed in as {display_name}");
+    println!("User ID: {}", account.user_id);
+    if let Some(email) = account.identity.email {
+        println!("Email: {email}");
+    }
+    println!("Plan: {}", account.subscription.tier);
+    println!("Provider: {}", account.auth.provider);
+    if let Some(key_id) = account.auth.key_id {
+        println!("Key ID: {key_id}");
+    }
     Ok(0)
+}
+
+async fn run_login() -> Result<u8> {
+    let config = Config::from_env()?;
+    let client = PolarisClient::new(config.base_url.clone(), None, config.timeout)?;
+    let start = client.start_cli_auth().await?;
+
+    println!("Polaris login");
+    println!("Base URL: {}", config.base_url);
+    println!("Code: {}", start.user_code);
+    println!("Browser: {}", start.login_url);
+
+    match open_url(&start.login_url) {
+        Ok(()) => println!("Opened browser. Finish login there to continue."),
+        Err(err) => {
+            println!("Open the URL above manually to continue.");
+            eprintln!("{err}");
+        }
+    }
+
+    loop {
+        match client
+            .poll_cli_auth(&start.request_id, &start.poll_token)
+            .await?
+        {
+            CliAuthPollResponse::Pending {
+                interval_ms: next_interval_ms,
+                ..
+            } => {
+                let interval_ms = next_interval_ms.max(MIN_CLI_AUTH_POLL_INTERVAL_MS);
+                sleep(TokioDuration::from_millis(interval_ms)).await;
+            }
+            CliAuthPollResponse::Approved {
+                api_key,
+                user_id,
+                display_name,
+                email,
+                ..
+            } => {
+                let store = KeychainCredentialStore::new()?;
+                store.set_api_key(&api_key)?;
+
+                let signed_in_as = display_name
+                    .as_deref()
+                    .or(email.as_deref())
+                    .unwrap_or(user_id.as_str());
+                println!("Signed in as {signed_in_as}.");
+
+                let account_client =
+                    PolarisClient::new(config.base_url.clone(), Some(api_key), config.timeout)?;
+                if let Ok(account) = account_client.fetch_account().await {
+                    println!("Plan: {}", account.subscription.tier);
+                }
+                return Ok(0);
+            }
+            CliAuthPollResponse::Consumed => {
+                return Err(TickError::InvalidArgument(
+                    "login session was already consumed".into(),
+                ));
+            }
+            CliAuthPollResponse::Expired => {
+                return Err(TickError::InvalidArgument("login session expired".into()));
+            }
+        }
+    }
 }
 
 async fn run_update(args: UpdateArgs) -> Result<u8> {
@@ -283,24 +383,21 @@ async fn run_browser(config: &Config) -> Result<u8> {
         limit: usize::MAX,
         json: false,
     };
-    run_list_remote(config, &client, args, true).await
+    run_catalog(config, &client, args, true).await
 }
 
-async fn run_list(config: &Config, args: ListCommand) -> Result<u8> {
-    match args.subcommand {
-        Some(ListSubcommand::Local(local)) => run_list_local(config, local),
-        None => {
-            let client = PolarisClient::new(
-                config.base_url.clone(),
-                config.api_key.clone(),
-                config.timeout,
-            )?;
-            run_list_remote(config, &client, args.remote, false).await
-        }
-    }
+fn run_list(config: &Config, args: LocalListArgs) -> Result<u8> {
+    let layout = Layout::new(config.root.clone());
+    let entries = layout.list_local_snapshots()?;
+    let filters = LocalListFilters::from_args(&args);
+    let entries = filter_local_list_entries(entries, &filters);
+    let output =
+        LocalListOutput::from_entries(layout.root().display().to_string(), filters, entries);
+    emit_output(args.json, &output)?;
+    Ok(0)
 }
 
-async fn run_list_remote(
+async fn run_catalog(
     config: &Config,
     client: &PolarisClient,
     args: RemoteListArgs,
@@ -339,17 +436,6 @@ async fn run_list_remote(
     Ok(0)
 }
 
-fn run_list_local(config: &Config, args: LocalListArgs) -> Result<u8> {
-    let layout = Layout::new(config.root.clone());
-    let entries = layout.list_local_snapshots()?;
-    let filters = LocalListFilters::from_args(&args);
-    let entries = filter_local_list_entries(entries, &filters);
-    let output =
-        LocalListOutput::from_entries(layout.root().display().to_string(), filters, entries);
-    emit_output(args.json, &output)?;
-    Ok(0)
-}
-
 async fn run_reset(config: &Config, args: ResetArgs) -> Result<u8> {
     let layout = layout_for_root(config.root.clone());
     let _guard = acquire_sync_lock(&layout)?;
@@ -378,7 +464,7 @@ async fn run_reset(config: &Config, args: ResetArgs) -> Result<u8> {
     Ok(0)
 }
 
-async fn run_sync(config: &Config, client: &PolarisClient, args: SyncArgs) -> Result<u8> {
+async fn run_download(config: &Config, client: &PolarisClient, args: DownloadArgs) -> Result<u8> {
     let layout = layout_for_root(config.root.clone());
     let _guard = acquire_sync_lock(&layout)?;
 
@@ -463,7 +549,7 @@ struct RemoteListOutput {
 impl RemoteListOutput {
     fn from_entries(filters: RemoteListFilters, datasets: Vec<RemoteDatasetEntry>) -> Self {
         Self {
-            command: "list",
+            command: "catalog",
             filters,
             dataset_total: datasets.len(),
             datasets,
@@ -473,7 +559,7 @@ impl RemoteListOutput {
 
 impl HumanOutput for RemoteListOutput {
     fn render_human(&self) -> String {
-        let mut lines = vec!["list".to_string()];
+        let mut lines = vec!["catalog".to_string()];
 
         if self.filters.exchange.is_some()
             || self.filters.asset.is_some()
@@ -555,7 +641,7 @@ impl LocalListOutput {
         snapshots: Vec<LocalSnapshotEntry>,
     ) -> Self {
         Self {
-            command: "list local",
+            command: "list",
             root,
             filters,
             snapshot_total: snapshots.len(),
@@ -566,7 +652,7 @@ impl LocalListOutput {
 
 impl HumanOutput for LocalListOutput {
     fn render_human(&self) -> String {
-        let mut lines = vec!["list local".to_string(), format!("root: {}", self.root)];
+        let mut lines = vec!["list".to_string(), format!("root: {}", self.root)];
 
         if self.filters.exchange.is_some()
             || self.filters.asset.is_some()
@@ -687,7 +773,7 @@ struct ResetOutput {
 impl SyncOutput {
     fn from_parts(plan: &SyncPlan, execution: SyncExecution) -> Self {
         Self {
-            command: "sync",
+            command: "download",
             exchange: plan.exchange.clone(),
             asset: plan.asset.clone(),
             requested_range: plan.requested_range.clone(),
@@ -706,7 +792,7 @@ impl SyncOutput {
 impl HumanOutput for SyncOutput {
     fn render_human(&self) -> String {
         let mut lines = vec![
-            format!("sync {} {}", self.exchange, self.asset),
+            format!("download {} {}", self.exchange, self.asset),
             format!("root: {}", self.root),
             format!(
                 "requested: {} -> {}",
@@ -771,7 +857,7 @@ mod tests {
     #[test]
     fn remote_list_json_shape_is_stable() {
         let output = RemoteListOutput {
-            command: "list",
+            command: "catalog",
             filters: RemoteListFilters {
                 exchange: Some("aster".into()),
                 asset: Some("BTCUSDT".into()),
@@ -795,14 +881,14 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"list\",\"filters\":{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"search\":\"btc\"},\"dataset_total\":1,\"datasets\":[{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\",\"source\":\"manifest\",\"access\":{\"status\":\"preview\",\"public_cutoff_date\":\"2026-05-28\"},\"dataset\":\"aster:BTCUSDT\"}]}"
+            "{\"command\":\"catalog\",\"filters\":{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"search\":\"btc\"},\"dataset_total\":1,\"datasets\":[{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\",\"source\":\"manifest\",\"access\":{\"status\":\"preview\",\"public_cutoff_date\":\"2026-05-28\"},\"dataset\":\"aster:BTCUSDT\"}]}"
         );
     }
 
     #[test]
     fn local_list_json_shape_is_stable() {
         let output = LocalListOutput {
-            command: "list local",
+            command: "list",
             root: "/tmp/polaris".into(),
             filters: LocalListFilters {
                 exchange: Some("aster".into()),
@@ -824,7 +910,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"list local\",\"root\":\"/tmp/polaris\",\"filters\":{\"exchange\":\"aster\",\"asset\":null,\"date\":null},\"snapshot_total\":1,\"snapshots\":[{\"key\":\"bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"path\":\"/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"filename\":\"file.jsonl.zst\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"date\":\"2026-06-01\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\"}]}"
+            "{\"command\":\"list\",\"root\":\"/tmp/polaris\",\"filters\":{\"exchange\":\"aster\",\"asset\":null,\"date\":null},\"snapshot_total\":1,\"snapshots\":[{\"key\":\"bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"path\":\"/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"filename\":\"file.jsonl.zst\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"date\":\"2026-06-01\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\"}]}"
         );
     }
 
@@ -978,7 +1064,7 @@ mod tests {
     #[test]
     fn sync_json_shape_is_stable() {
         let output = SyncOutput {
-            command: "sync",
+            command: "download",
             exchange: "aster".into(),
             asset: "BTCUSDT".into(),
             requested_range: TimeWindow {
@@ -1003,7 +1089,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"sync\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/polaris\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
+            "{\"command\":\"download\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/polaris\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
         );
     }
 

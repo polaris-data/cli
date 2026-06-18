@@ -78,7 +78,8 @@ impl CredentialStore for KeychainCredentialStore {
         let keychain_error = match self.primary_entry.set_password(trimmed_api_key) {
             Ok(()) => {
                 let _ = self.legacy_entry.set_password(trimmed_api_key);
-                if matches!(self.read_entry(&self.primary_entry), Ok(Some(stored)) if stored == trimmed_api_key) {
+                if matches!(self.read_entry(&self.primary_entry), Ok(Some(stored)) if stored == trimmed_api_key)
+                {
                     None
                 } else {
                     Some(anyhow!(
@@ -86,9 +87,9 @@ impl CredentialStore for KeychainCredentialStore {
                     ))
                 }
             }
-            Err(err) => Some(
-                anyhow!(err).context("failed to store Polaris API key in OS credential store"),
-            ),
+            Err(err) => {
+                Some(anyhow!(err).context("failed to store Polaris API key in OS credential store"))
+            }
         };
 
         self.write_fallback_api_key(PRIMARY_APP_NAME, trimmed_api_key)

@@ -43,13 +43,13 @@ polaris
 ### 3. Browse remote datasets
 
 ```bash
-polaris list --exchange hyperliquid --asset BTCUSDT
+polaris catalog --exchange hyperliquid --asset BTCUSDT
 ```
 
-### 4. Sync one time range
+### 4. Download one time range
 
 ```bash
-polaris sync \
+polaris download \
   --exchange hyperliquid \
   --asset BTCUSDT \
   --from 2026-06-01T00:00:00Z \
@@ -59,17 +59,23 @@ polaris sync \
 ### 5. Inspect local data
 
 ```bash
-polaris list local --exchange hyperliquid --asset BTCUSDT
+polaris list --exchange hyperliquid --asset BTCUSDT
 ```
 
-After sync completes, Polaris stores the fetched snapshot files under its managed local root.
+After download completes, Polaris stores the fetched snapshot files under its managed local root.
 
-### 6. Optional: Add an API key for more datasets
+### 6. Optional: Sign in for more datasets
 
-If you have an API key, store it in the OS credential store:
+To sign in with the browser flow and save the returned API key locally:
 
 ```bash
-polaris account set-key
+polaris login
+```
+
+To enter an API key manually and save it locally:
+
+```bash
+polaris key
 ```
 
 Or set it per-session:
@@ -81,7 +87,7 @@ export POLARIS_API_KEY="your_api_key"
 Check whether Polaris sees a configured credential:
 
 ```bash
-polaris account status
+polaris account
 ```
 
 ## CLI Overview
@@ -89,12 +95,12 @@ polaris account status
 ```text
 polaris
 ├── account
-│   ├── set-key
-│   └── status
+├── catalog
+├── key
+├── login
 ├── list
-│   └── local
+├── download
 ├── reset
-├── sync
 └── update
 ```
 
@@ -110,57 +116,65 @@ polaris --help
 
 Opens the interactive remote dataset browser TUI in a real terminal. If no TUI can be rendered, it falls back to plain CLI output.
 
-### `polaris account set-key`
+### `polaris login`
 
-Prompts for a Polaris API key and stores it in the OS credential store.
-
-```bash
-polaris account set-key
-```
-
-### `polaris account status`
-
-Prints whether Polaris currently has a Polaris API key configured, and whether that credential came from `POLARIS_API_KEY` or the OS credential store.
+Starts the browser login flow, waits for approval, and stores the returned Polaris API key in persistent credential storage.
 
 ```bash
-polaris account status
+polaris login
 ```
 
-### `polaris list`
+### `polaris key`
+
+Prompts securely for a Polaris API key and stores it in persistent credential storage.
+
+```bash
+polaris key
+```
+
+### `polaris account`
+
+Prints the current Polaris auth state, credential source, and live account details when signed in.
+
+```bash
+polaris account
+```
+
+### `polaris catalog`
 
 Lists remote datasets available from Polaris.
 
 ```bash
-polaris list --json
+polaris catalog --json
 
-polaris list \
+polaris catalog \
   --exchange aster \
   --asset BTCUSDT \
   --search btc \
   --limit 25
 ```
 
-### `polaris list local`
+### `polaris list`
 
 Lists local snapshots under the configured root.
 
 ```bash
-polaris list local --json
+polaris list --json
 ```
 
-### `polaris sync`
+### `polaris download`
 
-Downloads missing snapshots for the requested dataset and time range.
+Downloads missing snapshots for the requested dataset and time range. Existing complete local files are reused and not downloaded again.
 
-After sync completes, the fetched snapshots are stored under `data/` within the configured local root.
+After download completes, the fetched snapshots are stored under `data/` within the configured local root.
 ```bash
-polaris sync \
+polaris download \
   --exchange aster \
   --asset BTCUSDT \
   --from 2026-06-01T00:00:00Z \
   --to 2026-06-02T00:00:00Z
 
-polaris sync \
+polaris download \
   --exchange aster \
   --asset BTCUSDT \
   --from 2026-06-01T00:00:00Z \
@@ -186,7 +200,7 @@ By default, `polaris update` tries to preserve the current install directory whe
 
 ```bash
 polaris update
-polaris update --version v0.3.0
+polaris update --version v0.4.0
 polaris update --install-dir "$HOME/.local/bin"
 ```
 
@@ -199,10 +213,10 @@ polaris update --install-dir "$HOME/.local/bin"
 | `POLARIS_BASE_URL` | `https://api.polaris.supply` | Base URL for Polaris API requests |
 | `POLARIS_API_KEY` | unset | Optional bearer token for authenticated Polaris requests |
 | `POLARIS_ROOT` | platform app-data directory | Override the local dataset root directory |
-| `POLARIS_CONCURRENCY` | unset | Default sync concurrency when `--concurrency` is not provided |
+| `POLARIS_CONCURRENCY` | unset | Default download concurrency when `--concurrency` is not provided |
 | `POLARIS_TIMEOUT_SECS` | unset | Request timeout in seconds |
 
-`POLARIS_API_KEY` takes precedence over the stored credential from `polaris account set-key`.
+`POLARIS_API_KEY` takes precedence over the stored credential saved by `polaris login` or `polaris key`.
 
 Example:
 
@@ -212,9 +226,9 @@ export POLARIS_ROOT="$HOME/.local/share/polaris-dev"
 export POLARIS_CONCURRENCY="8"
 export POLARIS_TIMEOUT_SECS="60"
 
+polaris catalog
 polaris list
-polaris list local
-polaris sync --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z
+polaris download --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z
 ```
 
 Compatibility notes:
@@ -228,17 +242,17 @@ Use `--json` when you want structured output for scripts or agents.
 
 Commands with `--json` support:
 
+- `polaris catalog`
 - `polaris list`
-- `polaris list local`
-- `polaris sync`
+- `polaris download`
 - `polaris reset`
 
 Examples:
 
 ```bash
+polaris catalog --json
 polaris list --json
-polaris list local --json
-polaris sync --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z --json
+polaris download --exchange aster --asset BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z --json
 polaris reset --json
 ```
 
@@ -262,7 +276,7 @@ Within that root, Polaris owns this layout:
 ```
 
 - `data/` stores snapshot files fetched from Polaris
-- `tmp/` stores temporary sync state
+- `tmp/` stores temporary download state
 - `cache/` stores local cache state used by the CLI
 
 Compatibility note:
