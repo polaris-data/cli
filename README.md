@@ -200,7 +200,7 @@ By default, `polaris update` tries to preserve the current install directory whe
 
 ```bash
 polaris update
-polaris update --version v0.3.0
+polaris update --version v0.4.0
 polaris update --install-dir "$HOME/.local/bin"
 ```
 

@@ -147,7 +147,7 @@ mod tests {
             "polaris",
             "update",
             "--version",
-            "v0.3.0",
+            "v0.4.0",
             "--install-dir",
             "/tmp/polaris",
         ])
@@ -155,7 +155,7 @@ mod tests {
 
         match cli.command {
             Some(Command::Update(args)) => {
-                assert_eq!(args.version.as_deref(), Some("v0.3.0"));
+                assert_eq!(args.version.as_deref(), Some("v0.4.0"));
                 assert_eq!(
                     args.install_dir.as_deref(),
                     Some(std::path::Path::new("/tmp/polaris"))
