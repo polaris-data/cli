@@ -13,12 +13,11 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::{
-    AccountIdentity, ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView,
-    DaySyncUpdate, FileManagerTarget, RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed,
+    AccountIdentity, ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView, DaySyncUpdate,
+    FileManagerTarget, RemoteDatasetEntry, RemoteListTui, RemoteTuiSeed,
     api_key_requirement_for_download, build_day_coverages, diff_missing_snapshot_keys,
     format_snapshot_location, load_account_identity, load_bookmarks, save_account_identity,
-    save_bookmarks,
-    snapshot_reveal_target,
+    save_bookmarks, snapshot_reveal_target,
 };
 use crate::api::{DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry};
 use crate::config::{ApiKeySource, Config};

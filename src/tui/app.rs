@@ -65,7 +65,8 @@ pub(crate) struct RemoteListTui {
     pub(crate) mode: ViewMode,
     pub(crate) account_view: AccountView,
     active_cli_login_updates: Option<tokio::sync::mpsc::UnboundedReceiver<CliLoginUpdate>>,
-    active_account_refresh_updates: Option<tokio::sync::mpsc::UnboundedReceiver<AccountRefreshUpdate>>,
+    active_account_refresh_updates:
+        Option<tokio::sync::mpsc::UnboundedReceiver<AccountRefreshUpdate>>,
     pub(crate) api_key_prompt: Option<ApiKeyPromptState>,
 }
 
@@ -203,14 +204,18 @@ impl RemoteListTui {
             return Ok(());
         }
 
-        let mut identity = self.account_view.identity.clone().unwrap_or(AccountIdentity {
-            user_id: String::new(),
-            display_name: None,
-            email: None,
-            plan: None,
-            wallet_address: None,
-            avatar_url: None,
-        });
+        let mut identity = self
+            .account_view
+            .identity
+            .clone()
+            .unwrap_or(AccountIdentity {
+                user_id: String::new(),
+                display_name: None,
+                email: None,
+                plan: None,
+                wallet_address: None,
+                avatar_url: None,
+            });
         identity.display_name = None;
         identity.email = None;
         identity.plan = None;
@@ -378,7 +383,8 @@ impl RemoteListTui {
 
         if self.account_view.api_key_present {
             open_url("https://polaris.supply/account")?;
-            self.status_message = Some("opened https://polaris.supply/account in your browser".into());
+            self.status_message =
+                Some("opened https://polaris.supply/account in your browser".into());
             return Ok(());
         }
 
@@ -736,11 +742,19 @@ impl RemoteListTui {
         config: &Config,
     ) -> Result<()> {
         self.apply_runtime_config(config);
-        *client = PolarisClient::new(config.base_url.clone(), config.api_key.clone(), config.timeout)?;
+        *client = PolarisClient::new(
+            config.base_url.clone(),
+            config.api_key.clone(),
+            config.timeout,
+        )?;
         Ok(())
     }
 
-    fn store_api_key_and_load_config<S, F>(store: &S, api_key: &str, mut load_config: F) -> Result<Config>
+    fn store_api_key_and_load_config<S, F>(
+        store: &S,
+        api_key: &str,
+        mut load_config: F,
+    ) -> Result<Config>
     where
         S: CredentialStore,
         F: FnMut() -> Result<Config>,
@@ -822,11 +836,12 @@ impl RemoteListTui {
                 self.account_view.active_login = None;
                 self.account_view.identity = Some(identity.clone());
                 self.active_cli_login_updates = None;
-                let identity_persist_result = save_account_identity(&self.account_view.root, &identity);
+                let identity_persist_result =
+                    save_account_identity(&self.account_view.root, &identity);
 
-                match KeychainCredentialStore::new()
-                    .and_then(|store| Self::store_api_key_and_load_config(&store, &api_key, Config::from_env))
-                {
+                match KeychainCredentialStore::new().and_then(|store| {
+                    Self::store_api_key_and_load_config(&store, &api_key, Config::from_env)
+                }) {
                     Ok(config) => {
                         self.apply_runtime_client_config(client, &config)?;
                         if let Err(err) = self.hydrate_account_identity(client).await {
