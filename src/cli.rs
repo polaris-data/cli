@@ -15,23 +15,13 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Account(AccountCommand),
+    Account,
+    Key,
+    Login,
     List(ListCommand),
     Reset(ResetArgs),
     Sync(SyncArgs),
     Update(UpdateArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct AccountCommand {
-    #[command(subcommand)]
-    pub subcommand: AccountSubcommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum AccountSubcommand {
-    SetKey,
-    Status,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -114,6 +104,24 @@ mod tests {
     use clap::Parser;
 
     use super::{Cli, Command};
+
+    #[test]
+    fn account_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "account"]).expect("cli");
+        assert!(matches!(cli.command, Some(Command::Account)));
+    }
+
+    #[test]
+    fn login_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "login"]).expect("cli");
+        assert!(matches!(cli.command, Some(Command::Login)));
+    }
+
+    #[test]
+    fn key_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "key"]).expect("cli");
+        assert!(matches!(cli.command, Some(Command::Key)));
+    }
 
     #[test]
     fn update_command_parses_with_optional_overrides() {

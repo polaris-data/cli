@@ -29,6 +29,7 @@ use render::render;
 pub(crate) use app::RemoteListTui;
 pub(crate) use model::ViewMode;
 pub use model::{RemoteDatasetEntry, RemoteTuiSeed};
+pub(crate) use storage::open_url;
 
 #[cfg(test)]
 pub(crate) use coverage::{

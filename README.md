@@ -64,12 +64,18 @@ polaris list local --exchange hyperliquid --asset BTCUSDT
 
 After sync completes, Polaris stores the fetched snapshot files under its managed local root.
 
-### 6. Optional: Add an API key for more datasets
+### 6. Optional: Sign in for more datasets
 
-If you have an API key, store it in the OS credential store:
+To sign in with the browser flow and save the returned API key locally:
 
 ```bash
-polaris account set-key
+polaris login
+```
+
+To enter an API key manually and save it locally:
+
+```bash
+polaris key
 ```
 
 Or set it per-session:
@@ -81,7 +87,7 @@ export POLARIS_API_KEY="your_api_key"
 Check whether Polaris sees a configured credential:
 
 ```bash
-polaris account status
+polaris account
 ```
 
 ## CLI Overview
@@ -89,8 +95,8 @@ polaris account status
 ```text
 polaris
 ├── account
-│   ├── set-key
-│   └── status
+├── key
+├── login
 ├── list
 │   └── local
 ├── reset
@@ -110,20 +116,28 @@ polaris --help
 
 Opens the interactive remote dataset browser TUI in a real terminal. If no TUI can be rendered, it falls back to plain CLI output.
 
-### `polaris account set-key`
+### `polaris login`
 
-Prompts for a Polaris API key and stores it in the OS credential store.
+Starts the browser login flow, waits for approval, and stores the returned Polaris API key in persistent credential storage.
 
 ```bash
-polaris account set-key
+polaris login
 ```
 
-### `polaris account status`
+### `polaris key`
 
-Prints whether Polaris currently has a Polaris API key configured, and whether that credential came from `POLARIS_API_KEY` or the OS credential store.
+Prompts securely for a Polaris API key and stores it in persistent credential storage.
 
 ```bash
-polaris account status
+polaris key
+```
+
+### `polaris account`
+
+Prints the current Polaris auth state, credential source, and live account details when signed in.
+
+```bash
+polaris account
 ```
 
 ### `polaris list`
@@ -202,7 +216,7 @@ polaris update --install-dir "$HOME/.local/bin"
 | `POLARIS_CONCURRENCY` | unset | Default sync concurrency when `--concurrency` is not provided |
 | `POLARIS_TIMEOUT_SECS` | unset | Request timeout in seconds |
 
-`POLARIS_API_KEY` takes precedence over the stored credential from `polaris account set-key`.
+`POLARIS_API_KEY` takes precedence over the stored credential saved by `polaris login` or `polaris key`.
 
 Example:
 

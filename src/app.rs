@@ -8,12 +8,13 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use rpassword::prompt_password;
 use serde::Serialize;
+use tokio::time::{Duration as TokioDuration, sleep};
 use tracing_subscriber::EnvFilter;
 
-use crate::api::{CatalogExchange, PolarisClient};
+use crate::api::{CatalogExchange, CliAuthPollResponse, PolarisClient};
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::cli::{
-    AccountCommand, AccountSubcommand, Cli, Command, DatasetArgs, ListCommand, ListSubcommand,
+    Cli, Command, DatasetArgs, ListCommand, ListSubcommand,
     LocalListArgs, RemoteListArgs, ResetArgs, SyncArgs, UpdateArgs,
 };
 use crate::config::{ApiKeySource, Config};
@@ -21,10 +22,12 @@ use crate::error::{Result, TickError};
 use crate::layout::{Layout, LocalSnapshotEntry};
 use crate::planner::{SyncPlan, TimeWindow, build_sync_plan};
 use crate::syncer::{SyncExecution, acquire_sync_lock, execute_sync, layout_for_root};
+use crate::tui::open_url;
 use crate::tui::{RemoteDatasetEntry, RemoteTuiSeed, can_render_tui, run_remote_list_tui};
 
 const UPDATE_INSTALLER_URL: &str =
     "https://raw.githubusercontent.com/polaris-data/cli/main/install.sh";
+const MIN_CLI_AUTH_POLL_INTERVAL_MS: u64 = 250;
 
 pub async fn main_entry() -> ExitCode {
     init_tracing();
@@ -40,7 +43,9 @@ pub async fn main_entry() -> ExitCode {
 
 pub async fn run(cli: Cli) -> Result<u8> {
     match cli.command {
-        Some(Command::Account(args)) => run_account(args),
+        Some(Command::Account) => run_account().await,
+        Some(Command::Key) => run_key(),
+        Some(Command::Login) => run_login().await,
         Some(Command::List(args)) => {
             let config = Config::from_env()?;
             run_list(&config, args).await
@@ -66,14 +71,7 @@ pub async fn run(cli: Cli) -> Result<u8> {
     }
 }
 
-fn run_account(args: AccountCommand) -> Result<u8> {
-    match args.subcommand {
-        AccountSubcommand::SetKey => run_account_set_key(),
-        AccountSubcommand::Status => run_account_status(),
-    }
-}
-
-fn run_account_set_key() -> Result<u8> {
+fn run_key() -> Result<u8> {
     let api_key = prompt_password("Polaris API key: ")
         .context("failed to read API key from terminal")
         .map_err(TickError::Other)?;
@@ -88,16 +86,110 @@ fn run_account_set_key() -> Result<u8> {
     Ok(0)
 }
 
-fn run_account_status() -> Result<u8> {
+async fn run_account() -> Result<u8> {
     let config = Config::from_env()?;
-    let status = match config.api_key_source {
+    let auth_source = match config.api_key_source {
         Some(ApiKeySource::Environment) => "configured via POLARIS_API_KEY",
         Some(ApiKeySource::CredentialStore) => "configured via stored credential",
         None => "not configured",
     };
-    println!("Polaris account status: {status}");
+    println!("Polaris account");
     println!("Base URL: {}", config.base_url);
+    println!("Auth: {auth_source}");
+    if config.api_key.is_none() {
+        println!("Status: not signed in");
+        println!("Run `polaris login` to sign in.");
+        return Ok(0);
+    }
+
+    let client = PolarisClient::new(
+        config.base_url.clone(),
+        config.api_key.clone(),
+        config.timeout,
+    )?;
+    let account = client.fetch_account().await?;
+    let display_name = account
+        .identity
+        .display_name
+        .as_deref()
+        .or(account.identity.email.as_deref())
+        .unwrap_or(account.user_id.as_str());
+    println!("Status: signed in as {display_name}");
+    println!("User ID: {}", account.user_id);
+    if let Some(email) = account.identity.email {
+        println!("Email: {email}");
+    }
+    println!("Plan: {}", account.subscription.tier);
+    println!("Provider: {}", account.auth.provider);
+    if let Some(key_id) = account.auth.key_id {
+        println!("Key ID: {key_id}");
+    }
     Ok(0)
+}
+
+async fn run_login() -> Result<u8> {
+    let config = Config::from_env()?;
+    let client = PolarisClient::new(config.base_url.clone(), None, config.timeout)?;
+    let start = client.start_cli_auth().await?;
+
+    println!("Polaris login");
+    println!("Base URL: {}", config.base_url);
+    println!("Code: {}", start.user_code);
+    println!("Browser: {}", start.login_url);
+
+    match open_url(&start.login_url) {
+        Ok(()) => println!("Opened browser. Finish login there to continue."),
+        Err(err) => {
+            println!("Open the URL above manually to continue.");
+            eprintln!("{err}");
+        }
+    }
+
+    loop {
+        match client
+            .poll_cli_auth(&start.request_id, &start.poll_token)
+            .await?
+        {
+            CliAuthPollResponse::Pending {
+                interval_ms: next_interval_ms,
+                ..
+            } => {
+                let interval_ms = next_interval_ms.max(MIN_CLI_AUTH_POLL_INTERVAL_MS);
+                sleep(TokioDuration::from_millis(interval_ms)).await;
+            }
+            CliAuthPollResponse::Approved {
+                api_key,
+                user_id,
+                display_name,
+                email,
+                ..
+            } => {
+                let store = KeychainCredentialStore::new()?;
+                store.set_api_key(&api_key)?;
+
+                let signed_in_as = display_name
+                    .as_deref()
+                    .or(email.as_deref())
+                    .unwrap_or(user_id.as_str());
+                println!("Signed in as {signed_in_as}.");
+
+                let account_client =
+                    PolarisClient::new(config.base_url.clone(), Some(api_key), config.timeout)?;
+                if let Ok(account) = account_client.fetch_account().await {
+                    println!("Plan: {}", account.subscription.tier);
+                }
+                return Ok(0);
+            }
+            CliAuthPollResponse::Consumed => {
+                return Err(TickError::InvalidArgument(
+                    "login session was already consumed".into(),
+                ));
+            }
+            CliAuthPollResponse::Expired => {
+                return Err(TickError::InvalidArgument("login session expired".into()));
+            }
+        }
+    }
 }
 
 async fn run_update(args: UpdateArgs) -> Result<u8> {
