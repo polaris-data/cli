@@ -96,6 +96,7 @@ polaris account
 polaris
 ├── account
 ├── catalog
+├── feedback
 ├── key
 ├── login
 ├── list
@@ -152,6 +153,14 @@ polaris catalog \
   --asset BTCUSDT \
   --search btc \
   --limit 25
+```
+
+### `polaris feedback`
+
+Sends product feedback to the Polaris team through the configured Polaris API.
+
+```bash
+polaris feedback "can you add parquet downloads?"
 ```
 
 ### `polaris list`
