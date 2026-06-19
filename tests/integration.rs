@@ -16,7 +16,8 @@ use tokio::net::TcpListener;
 
 use polaris::api::{
     AccountResponse, CatalogAsset, CatalogExchange, CatalogResponse, CliAuthPollResponse,
-    CliAuthStartResponse, DatasetAccess, DatasetAccessStatus, PolarisClient, SnapshotEntry,
+    CliAuthStartResponse, DatasetAccess, DatasetAccessStatus, FeedbackResponse, PolarisClient,
+    SnapshotEntry,
 };
 use polaris::config::Config;
 use polaris::error::TickError;
@@ -54,6 +55,11 @@ struct SnapshotDownloadQuery {
 struct CatalogQuery {
     exchange: Option<String>,
     asset: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeedbackRequest {
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -368,6 +374,31 @@ async fn account_endpoint_returns_live_identity_for_api_key_sessions() {
     );
 }
 
+#[tokio::test]
+async fn feedback_endpoint_posts_message_and_bearer_token() {
+    let server = FeedbackTestServer::spawn().await;
+    let client = PolarisClient::new(
+        server.base_url(),
+        Some("polaris_key_example".into()),
+        Duration::from_secs(5),
+    )
+    .expect("client");
+
+    let response = client
+        .submit_feedback("can you add parquet downloads?")
+        .await
+        .expect("feedback");
+
+    assert_eq!(response, FeedbackResponse { ok: true });
+    assert_eq!(
+        server.take_requests(),
+        vec![CapturedFeedbackRequest {
+            authorization: Some("Bearer polaris_key_example".into()),
+            message: "can you add parquet downloads?".into(),
+        }]
+    );
+}
+
 #[derive(Clone)]
 struct CliAuthTestServerState {
     poll_calls: Arc<Mutex<usize>>,
@@ -511,6 +542,69 @@ async fn handle_account() -> Response {
         })),
     )
         .into_response()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CapturedFeedbackRequest {
+    authorization: Option<String>,
+    message: String,
+}
+
+#[derive(Clone)]
+struct FeedbackTestServerState {
+    requests: Arc<Mutex<Vec<CapturedFeedbackRequest>>>,
+}
+
+struct FeedbackTestServer {
+    addr: SocketAddr,
+    requests: Arc<Mutex<Vec<CapturedFeedbackRequest>>>,
+}
+
+impl FeedbackTestServer {
+    async fn spawn() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/feedback", post(handle_feedback))
+            .with_state(FeedbackTestServerState {
+                requests: requests.clone(),
+            });
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("server");
+        });
+
+        Self { addr, requests }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    fn take_requests(&self) -> Vec<CapturedFeedbackRequest> {
+        std::mem::take(&mut *self.requests.lock().expect("requests"))
+    }
+}
+
+async fn handle_feedback(
+    State(state): State<FeedbackTestServerState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<FeedbackRequest>,
+) -> Response {
+    state
+        .requests
+        .lock()
+        .expect("requests")
+        .push(CapturedFeedbackRequest {
+            authorization: headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
+            message: payload.message,
+        });
+
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
 #[derive(Clone)]

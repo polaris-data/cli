@@ -14,7 +14,8 @@ use tracing_subscriber::EnvFilter;
 use crate::api::{CatalogExchange, CliAuthPollResponse, PolarisClient};
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::cli::{
-    Cli, Command, DatasetArgs, DownloadArgs, LocalListArgs, RemoteListArgs, ResetArgs, UpdateArgs,
+    Cli, Command, DatasetArgs, DownloadArgs, FeedbackArgs, LocalListArgs, RemoteListArgs,
+    ResetArgs, UpdateArgs,
 };
 use crate::config::{ApiKeySource, Config};
 use crate::error::{Result, TickError};
@@ -52,6 +53,7 @@ pub async fn run(cli: Cli) -> Result<u8> {
             )?;
             run_catalog(&config, &client, args, false).await
         }
+        Some(Command::Feedback(args)) => run_feedback(args).await,
         Some(Command::Key) => run_key(),
         Some(Command::Login) => run_login().await,
         Some(Command::List(args)) => {
@@ -91,6 +93,31 @@ fn run_key() -> Result<u8> {
     let store = KeychainCredentialStore::new()?;
     store.set_api_key(&api_key)?;
     println!("Stored Polaris API key in persistent credential storage.");
+    Ok(0)
+}
+
+async fn run_feedback(args: FeedbackArgs) -> Result<u8> {
+    let message = args.message.trim();
+    if message.is_empty() {
+        return Err(TickError::InvalidArgument(
+            "feedback message cannot be empty".into(),
+        ));
+    }
+
+    let config = Config::from_env()?;
+    let client = PolarisClient::new(
+        config.base_url.clone(),
+        config.api_key.clone(),
+        config.timeout,
+    )?;
+    let response = client.submit_feedback(message).await?;
+    if !response.ok {
+        return Err(TickError::Other(anyhow!(
+            "feedback request failed: API returned ok=false"
+        )));
+    }
+
+    println!("Feedback sent.");
     Ok(0)
 }
 

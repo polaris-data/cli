@@ -17,6 +17,7 @@ pub struct Cli {
 pub enum Command {
     Account,
     Catalog(RemoteListArgs),
+    Feedback(FeedbackArgs),
     Key,
     Login,
     List(LocalListArgs),
@@ -51,6 +52,11 @@ pub struct RemoteListArgs {
     pub limit: usize,
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FeedbackArgs {
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -109,6 +115,15 @@ mod tests {
     fn key_command_parses() {
         let cli = Cli::try_parse_from(["polaris", "key"]).expect("cli");
         assert!(matches!(cli.command, Some(Command::Key)));
+    }
+
+    #[test]
+    fn feedback_command_parses() {
+        let cli = Cli::try_parse_from(["polaris", "feedback", "can you add this?"]).expect("cli");
+        match cli.command {
+            Some(Command::Feedback(args)) => assert_eq!(args.message, "can you add this?"),
+            other => panic!("expected feedback command, got {other:?}"),
+        }
     }
 
     #[test]

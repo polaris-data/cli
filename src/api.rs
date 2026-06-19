@@ -55,6 +55,11 @@ pub struct AccountResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct FeedbackResponse {
+    pub ok: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct AccountAuth {
     pub provider: String,
     pub key_id: Option<String>,
@@ -287,6 +292,15 @@ impl PolarisClient {
         let url = format!("{}/account", self.base_url);
         let request = self.api_client.get(url);
         self.send_json(request, "account request failed").await
+    }
+
+    pub async fn submit_feedback(&self, message: &str) -> Result<FeedbackResponse> {
+        let url = format!("{}/feedback", self.base_url);
+        let request = self
+            .api_client
+            .post(url)
+            .json(&serde_json::json!({ "message": message }));
+        self.send_json(request, "feedback request failed").await
     }
 
     pub async fn poll_cli_auth(
