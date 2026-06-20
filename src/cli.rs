@@ -6,7 +6,8 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "polaris",
     version,
-    about = "Download Polaris market data snapshots"
+    about = "Download Polaris market data snapshots",
+    after_help = "Running `polaris` with no command opens the interactive dataset browser TUI."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -15,14 +16,23 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Print the current Polaris auth state and account details.
     Account,
+    /// List remote datasets available from Polaris.
     Catalog(RemoteListArgs),
+    /// Send product feedback to the Polaris team.
     Feedback(FeedbackArgs),
+    /// Store a Polaris API key from a secure prompt.
     Key,
+    /// Sign in through the browser and store the returned API key.
     Login,
+    /// List local snapshots under the configured root.
     List(LocalListArgs),
+    /// Download missing snapshots for a dataset and time range.
     Download(DownloadArgs),
+    /// Remove all local dataset state managed by Polaris.
     Reset(ResetArgs),
+    /// Download and install the latest Polaris CLI release.
     Update(UpdateArgs),
 }
 
@@ -95,7 +105,7 @@ pub struct UpdateArgs {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     use super::{Cli, Command};
 
@@ -178,5 +188,24 @@ mod tests {
             }
             other => panic!("expected update command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn top_level_help_lists_command_descriptions() {
+        let mut cmd = Cli::command();
+        let help = cmd.render_help().to_string();
+
+        assert!(
+            help.contains("Running `polaris` with no command opens the interactive dataset browser TUI.")
+        );
+        assert!(help.contains("account   Print the current Polaris auth state and account details"));
+        assert!(help.contains("catalog   List remote datasets available from Polaris"));
+        assert!(help.contains("feedback  Send product feedback to the Polaris team"));
+        assert!(help.contains("key       Store a Polaris API key from a secure prompt"));
+        assert!(help.contains("login     Sign in through the browser and store the returned API key"));
+        assert!(help.contains("list      List local snapshots under the configured root"));
+        assert!(help.contains("download  Download missing snapshots for a dataset and time range"));
+        assert!(help.contains("reset     Remove all local dataset state managed by Polaris"));
+        assert!(help.contains("update    Download and install the latest Polaris CLI release"));
     }
 }
