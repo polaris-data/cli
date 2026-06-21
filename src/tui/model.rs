@@ -10,8 +10,8 @@ use crate::syncer::SyncProgressEvent;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RemoteDatasetEntry {
-    pub exchange: String,
-    pub asset: String,
+    pub venue: String,
+    pub symbol: String,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub source: Option<String>,
@@ -99,8 +99,8 @@ impl RemoteDatasetEntry {
 
 #[derive(Debug, Clone, Default)]
 pub struct RemoteTuiSeed {
-    pub exchange: Option<String>,
-    pub asset: Option<String>,
+    pub venue: Option<String>,
+    pub symbol: Option<String>,
     pub search: Option<String>,
 }
 

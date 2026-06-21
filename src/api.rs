@@ -82,19 +82,19 @@ pub struct AccountSubscription {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CatalogResponse {
-    pub exchanges: Vec<CatalogExchange>,
+    pub venues: Vec<CatalogVenue>,
     #[serde(rename = "updatedAt")]
     pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct CatalogExchange {
+pub struct CatalogVenue {
     pub id: String,
-    pub assets: Vec<CatalogAsset>,
+    pub symbols: Vec<CatalogSymbol>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct CatalogAsset {
+pub struct CatalogSymbol {
     pub id: String,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
@@ -340,21 +340,21 @@ impl PolarisClient {
 
     pub async fn fetch_catalog(
         &self,
-        exchange: Option<&str>,
-        asset: Option<&str>,
+        venue: Option<&str>,
+        symbol: Option<&str>,
     ) -> Result<CatalogResponse> {
-        if asset.is_some() && exchange.is_none() {
+        if symbol.is_some() && venue.is_none() {
             return Err(TickError::InvalidArgument(
-                "--asset on remote list requires --exchange".into(),
+                "--symbol on remote list requires --venue".into(),
             ));
         }
         let url = format!("{}/catalog", self.base_url);
         let mut params: Vec<(&str, &str)> = Vec::new();
-        if let Some(exchange) = exchange {
-            params.push(("exchange", exchange));
+        if let Some(venue) = venue {
+            params.push(("venue", venue));
         }
-        if let Some(asset) = asset {
-            params.push(("asset", asset));
+        if let Some(symbol) = symbol {
+            params.push(("symbol", symbol));
         }
         let request = self.api_client.get(url).query(&params);
         self.send_json(request, "catalog request failed").await
@@ -362,8 +362,8 @@ impl PolarisClient {
 
     pub async fn list_snapshots(
         &self,
-        exchange: &str,
-        asset: &str,
+        venue: &str,
+        symbol: &str,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> Result<(Vec<SnapshotEntry>, u64)> {
@@ -376,8 +376,8 @@ impl PolarisClient {
             let from_text = to_rfc3339(from);
             let to_text = to_rfc3339(to);
             let mut params = vec![
-                ("exchange".to_string(), exchange.to_string()),
-                ("asset".to_string(), asset.to_string()),
+                ("venue".to_string(), venue.to_string()),
+                ("symbol".to_string(), symbol.to_string()),
                 ("from".to_string(), from_text),
                 ("to".to_string(), to_text),
                 ("limit".to_string(), "1000".to_string()),
@@ -535,8 +535,8 @@ mod tests {
     fn parses_current_snapshots_shape() {
         let page: StandardSnapshotsPageWire = serde_json::from_str(
             r#"{
-                "exchange":"aster",
-                "asset":"ASTERUSDT",
+                "venue":"aster",
+                "symbol":"ASTERUSDT",
                 "total":1,
                 "total_bytes":123,
                 "limit":1000,
@@ -575,10 +575,10 @@ mod tests {
     fn parses_catalog_access_shape() {
         let catalog: CatalogResponse = serde_json::from_str(
             r#"{
-                "exchanges":[
+                "venues":[
                     {
                         "id":"aster",
-                        "assets":[
+                        "symbols":[
                             {
                                 "id":"ASTERUSDT",
                                 "start":"2026-05-18T14:16:33.886Z",
@@ -597,7 +597,7 @@ mod tests {
         )
         .expect("catalog should parse");
 
-        let access = catalog.exchanges[0].assets[0]
+        let access = catalog.venues[0].symbols[0]
             .access
             .as_ref()
             .expect("access should parse");
@@ -612,10 +612,10 @@ mod tests {
     fn parses_catalog_categories_from_string_or_array() {
         let catalog: CatalogResponse = serde_json::from_str(
             r#"{
-                "exchanges":[
+                "venues":[
                     {
                         "id":"aster",
-                        "assets":[
+                        "symbols":[
                             {
                                 "id":"ASTERUSDT",
                                 "start":"2026-05-18T14:16:33.886Z",
@@ -637,9 +637,9 @@ mod tests {
         )
         .expect("catalog should parse");
 
-        assert_eq!(catalog.exchanges[0].assets[0].categories, vec!["Bookmarks"]);
+        assert_eq!(catalog.venues[0].symbols[0].categories, vec!["Bookmarks"]);
         assert_eq!(
-            catalog.exchanges[0].assets[1].categories,
+            catalog.venues[0].symbols[1].categories,
             vec!["Futures", "Top Volume"]
         );
     }

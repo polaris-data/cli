@@ -686,7 +686,7 @@ pub(crate) fn format_snapshot_location(view: &DatasetView, day: &DayCoverage) ->
         .unwrap_or_else(|| {
             format!(
                 "data/<source>/{}/{}/{}",
-                view.dataset.exchange, view.dataset.asset, day.date
+                view.dataset.venue, view.dataset.symbol, day.date
             )
         });
     if day.local_keys.is_empty() {

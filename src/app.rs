@@ -11,7 +11,7 @@ use serde::Serialize;
 use tokio::time::{Duration as TokioDuration, sleep};
 use tracing_subscriber::EnvFilter;
 
-use crate::api::{CatalogExchange, CliAuthPollResponse, PolarisClient};
+use crate::api::{CatalogVenue, CliAuthPollResponse, PolarisClient};
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::cli::{
     Cli, Command, DatasetArgs, DownloadArgs, FeedbackArgs, LocalListArgs, RemoteListArgs,
@@ -404,8 +404,8 @@ async fn run_browser(config: &Config) -> Result<u8> {
         config.timeout,
     )?;
     let args = RemoteListArgs {
-        exchange: None,
-        asset: None,
+        venue: None,
+        symbol: None,
         search: None,
         limit: usize::MAX,
         json: false,
@@ -436,10 +436,10 @@ async fn run_catalog(
         ));
     }
     let catalog = client
-        .fetch_catalog(args.exchange.as_deref(), args.asset.as_deref())
+        .fetch_catalog(args.venue.as_deref(), args.symbol.as_deref())
         .await?;
     let filters = RemoteListFilters::from_args(&args);
-    let entries = filter_remote_catalog(catalog.exchanges, &filters, args.limit);
+    let entries = filter_remote_catalog(catalog.venues, &filters, args.limit);
     if args.json || !prefer_tui || !can_render_tui() {
         let output = RemoteListOutput::from_entries(filters, entries);
         emit_output(args.json, &output)?;
@@ -452,8 +452,8 @@ async fn run_catalog(
             config.root.clone(),
             config.concurrency,
             RemoteTuiSeed {
-                exchange: args.exchange.clone(),
-                asset: args.asset.clone(),
+                venue: args.venue.clone(),
+                symbol: args.symbol.clone(),
                 search: args.search.clone(),
             },
             config,
@@ -499,8 +499,8 @@ async fn run_download(config: &Config, client: &PolarisClient, args: DownloadArg
     let plan = build_sync_plan(
         client,
         config,
-        &args.dataset.exchange,
-        &args.dataset.asset,
+        &args.dataset.venue,
+        &args.dataset.symbol,
         requested_range,
     )
     .await?;
@@ -588,13 +588,13 @@ impl HumanOutput for RemoteListOutput {
     fn render_human(&self) -> String {
         let mut lines = vec!["catalog".to_string()];
 
-        if self.filters.exchange.is_some()
-            || self.filters.asset.is_some()
+        if self.filters.venue.is_some()
+            || self.filters.symbol.is_some()
             || self.filters.search.is_some()
         {
             lines.push(format!(
-                "filters: exchange={:?} asset={:?} search={:?}",
-                self.filters.exchange, self.filters.asset, self.filters.search
+                "filters: venue={:?} symbol={:?} search={:?}",
+                self.filters.venue, self.filters.symbol, self.filters.search
             ));
         }
 
@@ -605,8 +605,8 @@ impl HumanOutput for RemoteListOutput {
             for dataset in &self.datasets {
                 lines.push(format!(
                     "  {}:{} {} -> {} ({})",
-                    dataset.exchange,
-                    dataset.asset,
+                    dataset.venue,
+                    dataset.symbol,
                     dataset.start,
                     dataset.end,
                     dataset.access_summary()
@@ -620,16 +620,16 @@ impl HumanOutput for RemoteListOutput {
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 struct RemoteListFilters {
-    exchange: Option<String>,
-    asset: Option<String>,
+    venue: Option<String>,
+    symbol: Option<String>,
     search: Option<String>,
 }
 
 impl RemoteListFilters {
     fn from_args(args: &RemoteListArgs) -> Self {
         Self {
-            exchange: args.exchange.clone(),
-            asset: args.asset.clone(),
+            venue: args.venue.clone(),
+            symbol: args.symbol.clone(),
             search: args.search.clone(),
         }
     }
@@ -637,16 +637,16 @@ impl RemoteListFilters {
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 struct LocalListFilters {
-    exchange: Option<String>,
-    asset: Option<String>,
+    venue: Option<String>,
+    symbol: Option<String>,
     date: Option<String>,
 }
 
 impl LocalListFilters {
     fn from_args(args: &LocalListArgs) -> Self {
         Self {
-            exchange: args.exchange.clone(),
-            asset: args.asset.clone(),
+            venue: args.venue.clone(),
+            symbol: args.symbol.clone(),
             date: args.date.clone(),
         }
     }
@@ -681,13 +681,13 @@ impl HumanOutput for LocalListOutput {
     fn render_human(&self) -> String {
         let mut lines = vec!["list".to_string(), format!("root: {}", self.root)];
 
-        if self.filters.exchange.is_some()
-            || self.filters.asset.is_some()
+        if self.filters.venue.is_some()
+            || self.filters.symbol.is_some()
             || self.filters.date.is_some()
         {
             lines.push(format!(
-                "filters: exchange={:?} asset={:?} date={:?}",
-                self.filters.exchange, self.filters.asset, self.filters.date
+                "filters: venue={:?} symbol={:?} date={:?}",
+                self.filters.venue, self.filters.symbol, self.filters.date
             ));
         }
 
@@ -713,37 +713,37 @@ fn filter_local_list_entries(
 ) -> Vec<LocalSnapshotEntry> {
     entries
         .into_iter()
-        .filter(|entry| matches_exact(entry.exchange.as_deref(), filters.exchange.as_deref()))
-        .filter(|entry| matches_exact(entry.asset.as_deref(), filters.asset.as_deref()))
+        .filter(|entry| matches_exact(entry.venue.as_deref(), filters.venue.as_deref()))
+        .filter(|entry| matches_exact(entry.symbol.as_deref(), filters.symbol.as_deref()))
         .filter(|entry| matches_exact(entry.date.as_deref(), filters.date.as_deref()))
         .collect()
 }
 
 fn filter_remote_catalog(
-    exchanges: Vec<CatalogExchange>,
+    venues: Vec<CatalogVenue>,
     filters: &RemoteListFilters,
     limit: usize,
 ) -> Vec<RemoteDatasetEntry> {
     let mut datasets = Vec::new();
 
-    for exchange in exchanges {
-        let exchange_id = exchange.id;
-        for asset in exchange.assets {
-            let dataset = format!("{}:{}", exchange_id, asset.id);
-            if !matches_exact(Some(exchange_id.as_str()), filters.exchange.as_deref()) {
+    for venue in venues {
+        let venue_id = venue.id;
+        for symbol in venue.symbols {
+            let dataset = format!("{}:{}", venue_id, symbol.id);
+            if !matches_exact(Some(venue_id.as_str()), filters.venue.as_deref()) {
                 continue;
             }
-            if !matches_exact(Some(asset.id.as_str()), filters.asset.as_deref()) {
+            if !matches_exact(Some(symbol.id.as_str()), filters.symbol.as_deref()) {
                 continue;
             }
             let entry = RemoteDatasetEntry {
-                exchange: exchange_id.clone(),
-                asset: asset.id.clone(),
-                start: asset.start,
-                end: asset.end,
-                source: asset.source.clone(),
-                access: asset.access.clone(),
-                categories: asset.categories.clone(),
+                venue: venue_id.clone(),
+                symbol: symbol.id.clone(),
+                start: symbol.start,
+                end: symbol.end,
+                source: symbol.source.clone(),
+                access: symbol.access.clone(),
+                categories: symbol.categories.clone(),
                 dataset,
             };
             if let Some(search) = filters.search.as_deref()
@@ -776,8 +776,8 @@ fn matches_exact(value: Option<&str>, filter: Option<&str>) -> bool {
 #[derive(Debug, Serialize)]
 struct SyncOutput {
     command: &'static str,
-    exchange: String,
-    asset: String,
+    venue: String,
+    symbol: String,
     requested_range: TimeWindow,
     effective_range: TimeWindow,
     root: String,
@@ -801,8 +801,8 @@ impl SyncOutput {
     fn from_parts(plan: &SyncPlan, execution: SyncExecution) -> Self {
         Self {
             command: "download",
-            exchange: plan.exchange.clone(),
-            asset: plan.asset.clone(),
+            venue: plan.venue.clone(),
+            symbol: plan.symbol.clone(),
             requested_range: plan.requested_range.clone(),
             effective_range: plan.effective_range.clone(),
             root: plan.root.display().to_string(),
@@ -819,7 +819,7 @@ impl SyncOutput {
 impl HumanOutput for SyncOutput {
     fn render_human(&self) -> String {
         let mut lines = vec![
-            format!("download {} {}", self.exchange, self.asset),
+            format!("download {} {}", self.venue, self.symbol),
             format!("root: {}", self.root),
             format!(
                 "requested: {} -> {}",
@@ -874,7 +874,7 @@ mod tests {
         SyncOutput, TimeWindow, filter_local_list_entries, filter_remote_catalog,
         infer_install_dir_from_executable, looks_like_cargo_target_dir, run_reset,
     };
-    use crate::api::{CatalogAsset, CatalogExchange, DatasetAccess, DatasetAccessStatus};
+    use crate::api::{CatalogSymbol, CatalogVenue, DatasetAccess, DatasetAccessStatus};
     use crate::cli::ResetArgs;
     use crate::config::Config;
     use crate::layout::{Layout, LocalSnapshotEntry};
@@ -886,14 +886,14 @@ mod tests {
         let output = RemoteListOutput {
             command: "catalog",
             filters: RemoteListFilters {
-                exchange: Some("aster".into()),
-                asset: Some("BTCUSDT".into()),
+                venue: Some("aster".into()),
+                symbol: Some("BTCUSDT".into()),
                 search: Some("btc".into()),
             },
             dataset_total: 1,
             datasets: vec![RemoteDatasetEntry {
-                exchange: "aster".into(),
-                asset: "BTCUSDT".into(),
+                venue: "aster".into(),
+                symbol: "BTCUSDT".into(),
                 start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 end: Utc.with_ymd_and_hms(2026, 6, 1, 0, 9, 59).unwrap(),
                 source: Some("manifest".into()),
@@ -908,7 +908,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"catalog\",\"filters\":{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"search\":\"btc\"},\"dataset_total\":1,\"datasets\":[{\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\",\"source\":\"manifest\",\"access\":{\"status\":\"preview\",\"public_cutoff_date\":\"2026-05-28\"},\"dataset\":\"aster:BTCUSDT\"}]}"
+            "{\"command\":\"catalog\",\"filters\":{\"venue\":\"aster\",\"symbol\":\"BTCUSDT\",\"search\":\"btc\"},\"dataset_total\":1,\"datasets\":[{\"venue\":\"aster\",\"symbol\":\"BTCUSDT\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\",\"source\":\"manifest\",\"access\":{\"status\":\"preview\",\"public_cutoff_date\":\"2026-05-28\"},\"dataset\":\"aster:BTCUSDT\"}]}"
         );
     }
 
@@ -918,8 +918,8 @@ mod tests {
             command: "list",
             root: "/tmp/polaris".into(),
             filters: LocalListFilters {
-                exchange: Some("aster".into()),
-                asset: None,
+                venue: Some("aster".into()),
+                symbol: None,
                 date: None,
             },
             snapshot_total: 1,
@@ -927,8 +927,8 @@ mod tests {
                 key: "bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst".into(),
                 path: "/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst".into(),
                 filename: "file.jsonl.zst".into(),
-                exchange: Some("aster".into()),
-                asset: Some("BTCUSDT".into()),
+                venue: Some("aster".into()),
+                symbol: Some("BTCUSDT".into()),
                 date: Some("2026-06-01".into()),
                 start: Some(Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap()),
                 end: Some(Utc.with_ymd_and_hms(2026, 6, 1, 0, 9, 59).unwrap()),
@@ -937,7 +937,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"list\",\"root\":\"/tmp/polaris\",\"filters\":{\"exchange\":\"aster\",\"asset\":null,\"date\":null},\"snapshot_total\":1,\"snapshots\":[{\"key\":\"bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"path\":\"/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"filename\":\"file.jsonl.zst\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"date\":\"2026-06-01\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\"}]}"
+            "{\"command\":\"list\",\"root\":\"/tmp/polaris\",\"filters\":{\"venue\":\"aster\",\"symbol\":null,\"date\":null},\"snapshot_total\":1,\"snapshots\":[{\"key\":\"bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"path\":\"/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"filename\":\"file.jsonl.zst\",\"venue\":\"aster\",\"symbol\":\"BTCUSDT\",\"date\":\"2026-06-01\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\"}]}"
         );
     }
 
@@ -948,8 +948,8 @@ mod tests {
                 key: "bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into(),
                 path: "/tmp/a".into(),
                 filename: "a.jsonl.zst".into(),
-                exchange: Some("aster".into()),
-                asset: Some("BTCUSDT".into()),
+                venue: Some("aster".into()),
+                symbol: Some("BTCUSDT".into()),
                 date: Some("2026-06-01".into()),
                 start: None,
                 end: None,
@@ -958,8 +958,8 @@ mod tests {
                 key: "bronze/binance/ETHUSDT/2026-06-01/b.jsonl.zst".into(),
                 path: "/tmp/b".into(),
                 filename: "b.jsonl.zst".into(),
-                exchange: Some("binance".into()),
-                asset: Some("ETHUSDT".into()),
+                venue: Some("binance".into()),
+                symbol: Some("ETHUSDT".into()),
                 date: Some("2026-06-01".into()),
                 start: None,
                 end: None,
@@ -969,15 +969,15 @@ mod tests {
         let filtered = filter_local_list_entries(
             entries,
             &LocalListFilters {
-                exchange: Some("aster".into()),
-                asset: Some("BTCUSDT".into()),
+                venue: Some("aster".into()),
+                symbol: Some("BTCUSDT".into()),
                 date: Some("2026-06-01".into()),
             },
         );
 
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].exchange.as_deref(), Some("aster"));
-        assert_eq!(filtered[0].asset.as_deref(), Some("BTCUSDT"));
+        assert_eq!(filtered[0].venue.as_deref(), Some("aster"));
+        assert_eq!(filtered[0].symbol.as_deref(), Some("BTCUSDT"));
     }
 
     #[test]
@@ -1025,10 +1025,10 @@ mod tests {
     fn remote_list_filters_apply_search_and_limit() {
         let datasets = filter_remote_catalog(
             vec![
-                CatalogExchange {
+                CatalogVenue {
                     id: "aster".into(),
-                    assets: vec![
-                        CatalogAsset {
+                    symbols: vec![
+                        CatalogSymbol {
                             id: "BTCUSDT".into(),
                             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
@@ -1039,7 +1039,7 @@ mod tests {
                                 public_cutoff_date: None,
                             }),
                         },
-                        CatalogAsset {
+                        CatalogSymbol {
                             id: "ETHUSDT".into(),
                             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
@@ -1052,9 +1052,9 @@ mod tests {
                         },
                     ],
                 },
-                CatalogExchange {
+                CatalogVenue {
                     id: "binance".into(),
-                    assets: vec![CatalogAsset {
+                    symbols: vec![CatalogSymbol {
                         id: "BTCUSDT".into(),
                         start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                         end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
@@ -1070,8 +1070,8 @@ mod tests {
                 },
             ],
             &RemoteListFilters {
-                exchange: None,
-                asset: None,
+                venue: None,
+                symbol: None,
                 search: Some("btc".into()),
             },
             1,
@@ -1092,8 +1092,8 @@ mod tests {
     fn sync_json_shape_is_stable() {
         let output = SyncOutput {
             command: "download",
-            exchange: "aster".into(),
-            asset: "BTCUSDT".into(),
+            venue: "aster".into(),
+            symbol: "BTCUSDT".into(),
             requested_range: TimeWindow {
                 from: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 to: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
@@ -1116,7 +1116,7 @@ mod tests {
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"download\",\"exchange\":\"aster\",\"asset\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/polaris\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
+            "{\"command\":\"download\",\"venue\":\"aster\",\"symbol\":\"BTCUSDT\",\"requested_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"effective_range\":{\"from\":\"2026-06-01T00:00:00Z\",\"to\":\"2026-06-02T00:00:00Z\"},\"root\":\"/tmp/polaris\",\"remote_total\":2,\"downloaded_total\":1,\"skipped_total\":1,\"failed_total\":1,\"downloaded_keys\":[\"k\"],\"failed\":[{\"key\":\"x\",\"error\":\"boom\"}]}"
         );
     }
 

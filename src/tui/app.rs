@@ -80,11 +80,11 @@ impl RemoteListTui {
     ) -> Self {
         let mut search = seed.search.unwrap_or_default();
         if search.is_empty() {
-            if let Some(exchange) = seed.exchange {
-                search = exchange;
-                if let Some(asset) = seed.asset {
+            if let Some(venue) = seed.venue {
+                search = venue;
+                if let Some(symbol) = seed.symbol {
                     search.push(':');
-                    search.push_str(&asset);
+                    search.push_str(&symbol);
                 }
             }
         }
@@ -491,12 +491,7 @@ impl RemoteListTui {
         };
 
         let (remote_snapshots, _) = client
-            .list_snapshots(
-                &dataset.exchange,
-                &dataset.asset,
-                dataset.start,
-                dataset.end,
-            )
+            .list_snapshots(&dataset.venue, &dataset.symbol, dataset.start, dataset.end)
             .await?;
         let local_keys = self
             .local_keys
@@ -603,8 +598,8 @@ impl RemoteListTui {
         let plan = build_sync_plan(
             client,
             &config,
-            &dataset.exchange,
-            &dataset.asset,
+            &dataset.venue,
+            &dataset.symbol,
             requested_range,
         )
         .await?;
@@ -1037,12 +1032,7 @@ impl RemoteListTui {
         selected_date: NaiveDate,
     ) -> Result<()> {
         let (remote_snapshots, _) = client
-            .list_snapshots(
-                &dataset.exchange,
-                &dataset.asset,
-                dataset.start,
-                dataset.end,
-            )
+            .list_snapshots(&dataset.venue, &dataset.symbol, dataset.start, dataset.end)
             .await?;
         let local_keys = self
             .local_keys

@@ -16,12 +16,12 @@ pub(crate) fn summarize_local_snapshots(
 ) -> BTreeMap<String, LocalDatasetSummary> {
     let mut summaries = BTreeMap::new();
     for snapshot in snapshots {
-        let (Some(exchange), Some(asset)) =
-            (snapshot.exchange.as_deref(), snapshot.asset.as_deref())
+        let (Some(venue), Some(symbol)) =
+            (snapshot.venue.as_deref(), snapshot.symbol.as_deref())
         else {
             continue;
         };
-        let key = format!("{exchange}:{asset}");
+        let key = format!("{venue}:{symbol}");
         let summary = summaries
             .entry(key)
             .or_insert_with(LocalDatasetSummary::default);
@@ -47,12 +47,12 @@ pub(crate) fn group_local_snapshot_keys(
 ) -> BTreeMap<String, Vec<String>> {
     let mut grouped = BTreeMap::new();
     for snapshot in snapshots {
-        let (Some(exchange), Some(asset)) = (snapshot.exchange.clone(), snapshot.asset.clone())
+        let (Some(venue), Some(symbol)) = (snapshot.venue.clone(), snapshot.symbol.clone())
         else {
             continue;
         };
         grouped
-            .entry(format!("{exchange}:{asset}"))
+            .entry(format!("{venue}:{symbol}"))
             .or_insert_with(Vec::new)
             .push(snapshot.key);
     }
