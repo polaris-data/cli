@@ -11,7 +11,7 @@
 
 ## Why Polaris
 
-- Browse remote venue and symbol datasets from the terminal
+- Browse remote source and market datasets from the terminal
 - Sync only the snapshot ranges you need
 - Materialize full UTC-day local files automatically when a day is fully present
 - Inspect the local dataset tree managed by Polaris
@@ -43,15 +43,15 @@ polaris
 ### 3. Browse remote datasets
 
 ```bash
-polaris catalog --venue hyperliquid --symbol BTCUSDT
+polaris catalog --source hyperliquid --market BTCUSDT
 ```
 
 ### 4. Download one time range
 
 ```bash
 polaris download \
-  --venue hyperliquid \
-  --symbol BTCUSDT \
+  --source hyperliquid \
+  --market BTCUSDT \
   --from 2026-06-01T00:00:00Z \
   --to 2026-06-02T00:00:00Z
 ```
@@ -59,7 +59,7 @@ polaris download \
 ### 5. Inspect local data
 
 ```bash
-polaris list --venue hyperliquid --symbol BTCUSDT
+polaris list --source hyperliquid --market BTCUSDT
 ```
 
 After download completes, Polaris stores the fetched snapshot files under its managed local root.
@@ -149,8 +149,8 @@ Lists remote datasets available from Polaris.
 polaris catalog --json
 
 polaris catalog \
-  --venue aster \
-  --symbol BTCUSDT \
+  --source aster \
+  --market BTCUSDT \
   --search btc \
   --limit 25
 ```
@@ -178,14 +178,14 @@ Downloads missing snapshots for the requested dataset and time range. Existing c
 After download completes, the fetched snapshots are stored under `data/` within the configured local root.
 ```bash
 polaris download \
-  --venue aster \
-  --symbol BTCUSDT \
+  --source aster \
+  --market BTCUSDT \
   --from 2026-06-01T00:00:00Z \
   --to 2026-06-02T00:00:00Z
 
 polaris download \
-  --venue aster \
-  --symbol BTCUSDT \
+  --source aster \
+  --market BTCUSDT \
   --from 2026-06-01T00:00:00Z \
   --to 2026-06-02T00:00:00Z \
   --json \
@@ -237,7 +237,7 @@ export POLARIS_TIMEOUT_SECS="60"
 
 polaris catalog
 polaris list
-polaris download --venue aster --symbol BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z
+polaris download --source aster --market BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z
 ```
 
 Compatibility notes:
@@ -261,7 +261,7 @@ Examples:
 ```bash
 polaris catalog --json
 polaris list --json
-polaris download --venue aster --symbol BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z --json
+polaris download --source aster --market BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z --json
 polaris reset --json
 ```
 

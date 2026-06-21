@@ -17,8 +17,8 @@ pub struct LocalSnapshotEntry {
     pub key: String,
     pub path: String,
     pub filename: String,
-    pub venue: Option<String>,
-    pub symbol: Option<String>,
+    pub source: Option<String>,
+    pub market: Option<String>,
     pub date: Option<String>,
     pub start: Option<DateTime<Utc>>,
     pub end: Option<DateTime<Utc>>,
@@ -57,11 +57,11 @@ impl Layout {
         self.root.join("cache")
     }
 
-    pub fn catalog_cache_path(&self, venue: &str, symbol: &str) -> PathBuf {
+    pub fn catalog_cache_path(&self, source: &str, market: &str) -> PathBuf {
         self.cache_root()
             .join("catalog")
-            .join(venue)
-            .join(format!("{symbol}.json"))
+            .join(source)
+            .join(format!("{market}.json"))
     }
 
     pub fn data_root(&self) -> PathBuf {
@@ -146,15 +146,15 @@ fn collect_snapshot_files(
             .file_name()
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_default();
-        let (venue, symbol, date) = infer_snapshot_identity(&key, &filename);
+        let (source, market, date) = infer_snapshot_identity(&key, &filename);
         let (start, end) = parse_snapshot_times(&filename);
 
         files.push(LocalSnapshotEntry {
             key,
             path: path.to_string_lossy().to_string(),
             filename,
-            venue,
-            symbol,
+            source,
+            market,
             date,
             start,
             end,
@@ -202,42 +202,42 @@ fn infer_snapshot_identity(
     }
 
     if let Some((index, date)) = infer_date_segment_index(&segments) {
-        let venue = index
+        let source = index
             .checked_sub(2)
             .and_then(|value| segments.get(value))
             .map(|value| (*value).to_string());
-        let symbol = index
+        let market = index
             .checked_sub(1)
             .and_then(|value| segments.get(value))
             .map(|value| (*value).to_string());
-        return (venue, symbol, Some(date.to_string()));
+        return (source, market, Some(date.to_string()));
     }
 
     if let Some(date) = infer_date_from_text(filename) {
-        let venue = segments
+        let source = segments
             .len()
             .checked_sub(3)
             .and_then(|value| segments.get(value))
             .map(|value| (*value).to_string());
-        let symbol = segments
+        let market = segments
             .len()
             .checked_sub(2)
             .and_then(|value| segments.get(value))
             .map(|value| (*value).to_string());
-        return (venue, symbol, Some(date.to_string()));
+        return (source, market, Some(date.to_string()));
     }
 
-    let venue = segments
+    let source = segments
         .len()
         .checked_sub(4)
         .and_then(|value| segments.get(value))
         .map(|value| (*value).to_string());
-    let symbol = segments
+    let market = segments
         .len()
         .checked_sub(3)
         .and_then(|value| segments.get(value))
         .map(|value| (*value).to_string());
-    (venue, symbol, None)
+    (source, market, None)
 }
 
 fn infer_date_from_segments(segments: &[&str]) -> Option<NaiveDate> {
@@ -297,8 +297,8 @@ mod tests {
         let entries = layout.list_local_snapshots().expect("entries");
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
-        assert_eq!(entry.venue.as_deref(), Some("aster"));
-        assert_eq!(entry.symbol.as_deref(), Some("BTCUSDT"));
+        assert_eq!(entry.source.as_deref(), Some("aster"));
+        assert_eq!(entry.market.as_deref(), Some("BTCUSDT"));
         assert_eq!(entry.date.as_deref(), Some("2026-06-01"));
         assert_eq!(
             entry.start,
@@ -323,8 +323,8 @@ mod tests {
         let entries = layout.list_local_snapshots().expect("entries");
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
-        assert_eq!(entry.venue.as_deref(), Some("aster"));
-        assert_eq!(entry.symbol.as_deref(), Some("BTCUSDT"));
+        assert_eq!(entry.source.as_deref(), Some("aster"));
+        assert_eq!(entry.market.as_deref(), Some("BTCUSDT"));
         assert_eq!(entry.date.as_deref(), Some("2026-06-01"));
         assert_eq!(entry.start, None);
         assert_eq!(entry.end, None);

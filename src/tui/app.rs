@@ -80,11 +80,11 @@ impl RemoteListTui {
     ) -> Self {
         let mut search = seed.search.unwrap_or_default();
         if search.is_empty() {
-            if let Some(venue) = seed.venue {
-                search = venue;
-                if let Some(symbol) = seed.symbol {
+            if let Some(source) = seed.source {
+                search = source;
+                if let Some(market) = seed.market {
                     search.push(':');
-                    search.push_str(&symbol);
+                    search.push_str(&market);
                 }
             }
         }
@@ -491,7 +491,7 @@ impl RemoteListTui {
         };
 
         let (remote_snapshots, _) = client
-            .list_snapshots(&dataset.venue, &dataset.symbol, dataset.start, dataset.end)
+            .list_snapshots(&dataset.source, &dataset.market, dataset.start, dataset.end)
             .await?;
         let local_keys = self
             .local_keys
@@ -598,8 +598,8 @@ impl RemoteListTui {
         let plan = build_sync_plan(
             client,
             &config,
-            &dataset.venue,
-            &dataset.symbol,
+            &dataset.source,
+            &dataset.market,
             requested_range,
         )
         .await?;
@@ -1032,7 +1032,7 @@ impl RemoteListTui {
         selected_date: NaiveDate,
     ) -> Result<()> {
         let (remote_snapshots, _) = client
-            .list_snapshots(&dataset.venue, &dataset.symbol, dataset.start, dataset.end)
+            .list_snapshots(&dataset.source, &dataset.market, dataset.start, dataset.end)
             .await?;
         let local_keys = self
             .local_keys

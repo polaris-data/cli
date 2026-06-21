@@ -25,16 +25,16 @@ use crate::layout::LocalSnapshotEntry;
 
 #[derive(Clone)]
 struct SnapshotListTestServerState {
-    venue: String,
-    symbol: String,
+    source: String,
+    market: String,
     snapshots: Vec<SnapshotEntry>,
     total_bytes: u64,
 }
 
 #[derive(Debug, Deserialize)]
 struct SnapshotListQuery {
-    venue: String,
-    symbol: String,
+    source: String,
+    market: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,8 +51,8 @@ struct SnapshotListTestServer {
 
 impl SnapshotListTestServer {
     async fn spawn(
-        venue: String,
-        symbol: String,
+        source: String,
+        market: String,
         snapshots: Vec<SnapshotEntry>,
         total_bytes: u64,
     ) -> Self {
@@ -61,8 +61,8 @@ impl SnapshotListTestServer {
         let app = Router::new()
             .route("/snapshots", get(handle_test_snapshots))
             .with_state(SnapshotListTestServerState {
-                venue,
-                symbol,
+                source,
+                market,
                 snapshots,
                 total_bytes,
             });
@@ -105,8 +105,8 @@ async fn handle_test_snapshots(
     State(state): State<SnapshotListTestServerState>,
     Query(query): Query<SnapshotListQuery>,
 ) -> Json<SnapshotListResponse> {
-    assert_eq!(query.venue, state.venue);
-    assert_eq!(query.symbol, state.symbol);
+    assert_eq!(query.source, state.source);
+    assert_eq!(query.market, state.market);
 
     Json(SnapshotListResponse {
         total: state.snapshots.len(),
@@ -146,11 +146,11 @@ async fn handle_test_account() -> Json<serde_json::Value> {
 fn search_filters_remote_datasets() {
     let datasets = vec![
         RemoteDatasetEntry {
-            venue: "aster".into(),
-            symbol: "BTCUSDT".into(),
+            source: "aster".into(),
+            market: "BTCUSDT".into(),
             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-            source: Some("manifest".into()),
+            catalog_source: Some("manifest".into()),
             access: Some(DatasetAccess {
                 status: DatasetAccessStatus::Open,
                 public_cutoff_date: None,
@@ -159,11 +159,11 @@ fn search_filters_remote_datasets() {
             dataset: "aster:BTCUSDT".into(),
         },
         RemoteDatasetEntry {
-            venue: "binance".into(),
-            symbol: "ETHUSDT".into(),
+            source: "binance".into(),
+            market: "ETHUSDT".into(),
             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-            source: Some("manifest".into()),
+            catalog_source: Some("manifest".into()),
             access: Some(DatasetAccess {
                 status: DatasetAccessStatus::Restricted,
                 public_cutoff_date: None,
@@ -196,11 +196,11 @@ fn search_filters_remote_datasets() {
 fn access_search_filters_remote_datasets() {
     let datasets = vec![
         RemoteDatasetEntry {
-            venue: "aster".into(),
-            symbol: "BTCUSDT".into(),
+            source: "aster".into(),
+            market: "BTCUSDT".into(),
             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-            source: Some("manifest".into()),
+            catalog_source: Some("manifest".into()),
             access: Some(DatasetAccess {
                 status: DatasetAccessStatus::Preview,
                 public_cutoff_date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
@@ -209,11 +209,11 @@ fn access_search_filters_remote_datasets() {
             dataset: "aster:BTCUSDT".into(),
         },
         RemoteDatasetEntry {
-            venue: "binance".into(),
-            symbol: "ETHUSDT".into(),
+            source: "binance".into(),
+            market: "ETHUSDT".into(),
             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-            source: Some("manifest".into()),
+            catalog_source: Some("manifest".into()),
             access: Some(DatasetAccess {
                 status: DatasetAccessStatus::Restricted,
                 public_cutoff_date: None,
@@ -251,11 +251,11 @@ fn bookmarked_datasets_sort_to_top() {
     let app = RemoteListTui::new(
         vec![
             RemoteDatasetEntry {
-                venue: "aster".into(),
-                symbol: "BTCUSDT".into(),
+                source: "aster".into(),
+                market: "BTCUSDT".into(),
                 start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-                source: Some("manifest".into()),
+                catalog_source: Some("manifest".into()),
                 access: Some(DatasetAccess {
                     status: DatasetAccessStatus::Open,
                     public_cutoff_date: None,
@@ -264,11 +264,11 @@ fn bookmarked_datasets_sort_to_top() {
                 dataset: "aster:BTCUSDT".into(),
             },
             RemoteDatasetEntry {
-                venue: "binance".into(),
-                symbol: "ETHUSDT".into(),
+                source: "binance".into(),
+                market: "ETHUSDT".into(),
                 start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-                source: Some("manifest".into()),
+                catalog_source: Some("manifest".into()),
                 access: Some(DatasetAccess {
                     status: DatasetAccessStatus::Open,
                     public_cutoff_date: None,
@@ -298,11 +298,11 @@ fn toggling_bookmark_persists_without_reordering_current_session() {
     let mut app = RemoteListTui::new(
         vec![
             RemoteDatasetEntry {
-                venue: "aster".into(),
-                symbol: "BTCUSDT".into(),
+                source: "aster".into(),
+                market: "BTCUSDT".into(),
                 start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-                source: Some("manifest".into()),
+                catalog_source: Some("manifest".into()),
                 access: Some(DatasetAccess {
                     status: DatasetAccessStatus::Open,
                     public_cutoff_date: None,
@@ -311,11 +311,11 @@ fn toggling_bookmark_persists_without_reordering_current_session() {
                 dataset: "aster:BTCUSDT".into(),
             },
             RemoteDatasetEntry {
-                venue: "binance".into(),
-                symbol: "ETHUSDT".into(),
+                source: "binance".into(),
+                market: "ETHUSDT".into(),
                 start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-                source: Some("manifest".into()),
+                catalog_source: Some("manifest".into()),
                 access: Some(DatasetAccess {
                     status: DatasetAccessStatus::Open,
                     public_cutoff_date: None,
@@ -351,11 +351,11 @@ fn category_carousel_cycles_through_bookmarks_and_catalog_categories() {
     let mut app = RemoteListTui::new(
         vec![
             RemoteDatasetEntry {
-                venue: "aster".into(),
-                symbol: "BTCUSDT".into(),
+                source: "aster".into(),
+                market: "BTCUSDT".into(),
                 start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-                source: Some("manifest".into()),
+                catalog_source: Some("manifest".into()),
                 access: Some(DatasetAccess {
                     status: DatasetAccessStatus::Open,
                     public_cutoff_date: None,
@@ -364,11 +364,11 @@ fn category_carousel_cycles_through_bookmarks_and_catalog_categories() {
                 dataset: "aster:BTCUSDT".into(),
             },
             RemoteDatasetEntry {
-                venue: "binance".into(),
-                symbol: "ETHUSDT".into(),
+                source: "binance".into(),
+                market: "ETHUSDT".into(),
                 start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
                 end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-                source: Some("manifest".into()),
+                catalog_source: Some("manifest".into()),
                 access: Some(DatasetAccess {
                     status: DatasetAccessStatus::Open,
                     public_cutoff_date: None,
@@ -464,11 +464,11 @@ fn removing_bookmark_refreshes_bookmarks_category() {
 
     let mut app = RemoteListTui::new(
         vec![RemoteDatasetEntry {
-            venue: "binance".into(),
-            symbol: "ETHUSDT".into(),
+            source: "binance".into(),
+            market: "ETHUSDT".into(),
             start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
             end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-            source: Some("manifest".into()),
+            catalog_source: Some("manifest".into()),
             access: Some(DatasetAccess {
                 status: DatasetAccessStatus::Open,
                 public_cutoff_date: None,
@@ -641,11 +641,11 @@ async fn hydrating_account_identity_uses_live_account_endpoint_and_updates_cache
 #[test]
 fn account_view_is_reachable_without_discarding_browser_selection() {
     let dataset = RemoteDatasetEntry {
-        venue: "aster".into(),
-        symbol: "BTCUSDT".into(),
+        source: "aster".into(),
+        market: "BTCUSDT".into(),
         start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
         end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-        source: Some("manifest".into()),
+        catalog_source: Some("manifest".into()),
         access: Some(DatasetAccess {
             status: DatasetAccessStatus::Open,
             public_cutoff_date: None,
@@ -725,11 +725,11 @@ fn day_coverages_classify_full_partial_and_empty_days() {
 #[test]
 fn selected_day_summary_reports_snapshot_location() {
     let dataset = RemoteDatasetEntry {
-        venue: "aster".into(),
-        symbol: "BTCUSDT".into(),
+        source: "aster".into(),
+        market: "BTCUSDT".into(),
         start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
         end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-        source: Some("manifest".into()),
+        catalog_source: Some("manifest".into()),
         access: Some(DatasetAccess {
             status: DatasetAccessStatus::Open,
             public_cutoff_date: None,
@@ -810,11 +810,11 @@ async fn sync_updates_do_not_skip_progress_frames() {
         filename: "aster_ASTERUSDT_2026-06-01_standard.jsonl.zst".into(),
     };
     let dataset = RemoteDatasetEntry {
-        venue: "aster".into(),
-        symbol: "ASTERUSDT".into(),
+        source: "aster".into(),
+        market: "ASTERUSDT".into(),
         start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
         end: Utc.with_ymd_and_hms(2026, 6, 1, 23, 59, 59).unwrap(),
-        source: Some("manifest".into()),
+        catalog_source: Some("manifest".into()),
         access: Some(DatasetAccess {
             status: DatasetAccessStatus::Preview,
             public_cutoff_date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
@@ -866,8 +866,8 @@ async fn sync_updates_do_not_skip_progress_frames() {
         receiver: rx,
     });
     let server = SnapshotListTestServer::spawn(
-        dataset.venue.clone(),
-        dataset.symbol.clone(),
+        dataset.source.clone(),
+        dataset.market.clone(),
         vec![remote_snapshot],
         2048,
     )

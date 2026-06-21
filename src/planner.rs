@@ -33,8 +33,8 @@ pub enum LocalSnapshotState {
 
 #[derive(Debug, Clone)]
 pub struct SyncPlan {
-    pub venue: String,
-    pub symbol: String,
+    pub source: String,
+    pub market: String,
     pub requested_range: TimeWindow,
     pub effective_range: TimeWindow,
     pub root: PathBuf,
@@ -93,15 +93,15 @@ impl SyncPlan {
 pub async fn build_sync_plan(
     client: &PolarisClient,
     config: &Config,
-    venue: &str,
-    symbol: &str,
+    source: &str,
+    market: &str,
     requested_range: TimeWindow,
 ) -> Result<SyncPlan> {
     let layout = Layout::new(config.root.clone());
-    let catalog = client.fetch_catalog(Some(venue), Some(symbol)).await?;
-    let coverage = find_symbol_coverage(&catalog, venue, symbol).ok_or_else(|| {
+    let catalog = client.fetch_catalog(Some(source), Some(market)).await?;
+    let coverage = find_market_coverage(&catalog, source, market).ok_or_else(|| {
         TickError::DatasetUnavailable(format!(
-            "dataset venue/symbol {venue}/{symbol} is not available"
+            "dataset source/market {source}/{market} is not available"
         ))
     })?;
     let effective_range = intersect_ranges(
@@ -113,19 +113,19 @@ pub async fn build_sync_plan(
     )
     .ok_or_else(|| {
         TickError::DatasetUnavailable(format!(
-            "requested range does not overlap remote coverage for venue/symbol {venue}/{symbol}"
+            "requested range does not overlap remote coverage for source/market {source}/{market}"
         ))
     })?;
 
     let (remote_snapshots, total_remote_bytes) = client
-        .list_snapshots(venue, symbol, effective_range.from, effective_range.to)
+        .list_snapshots(source, market, effective_range.from, effective_range.to)
         .await?;
 
     let snapshots = classify_snapshots(&layout, remote_snapshots).await?;
 
     Ok(SyncPlan {
-        venue: venue.to_string(),
-        symbol: symbol.to_string(),
+        source: source.to_string(),
+        market: market.to_string(),
         requested_range,
         effective_range,
         root: config.root.clone(),
@@ -165,16 +165,16 @@ async fn classify_snapshots(
     Ok(snapshots)
 }
 
-fn find_symbol_coverage<'a>(
+fn find_market_coverage<'a>(
     catalog: &'a CatalogResponse,
-    venue: &str,
-    symbol: &str,
-) -> Option<&'a crate::api::CatalogSymbol> {
+    source: &str,
+    market: &str,
+) -> Option<&'a crate::api::CatalogMarket> {
     catalog
-        .venues
+        .sources
         .iter()
-        .find(|entry| entry.id == venue)
-        .and_then(|entry| entry.symbols.iter().find(|candidate| candidate.id == symbol))
+        .find(|entry| entry.id == source)
+        .and_then(|entry| entry.markets.iter().find(|candidate| candidate.id == market))
 }
 
 pub fn intersect_ranges(requested: &TimeWindow, available: &TimeWindow) -> Option<TimeWindow> {
@@ -223,10 +223,10 @@ mod tests {
         let layout = Layout::new(root.path().to_path_buf());
 
         let present = layout
-            .data_path_for_key("bronze/venue/symbol/2026-01-01/present.jsonl.zst")
+            .data_path_for_key("bronze/source/market/2026-01-01/present.jsonl.zst")
             .expect("present path");
         let incomplete =
-            layout.temp_path_for_key("bronze/venue/symbol/2026-01-01/incomplete.jsonl.zst");
+            layout.temp_path_for_key("bronze/source/market/2026-01-01/incomplete.jsonl.zst");
 
         tokio::fs::create_dir_all(present.parent().expect("present parent"))
             .await
@@ -245,15 +245,15 @@ mod tests {
             &layout,
             vec![
                 crate::api::SnapshotEntry {
-                    key: "bronze/venue/symbol/2026-01-01/present.jsonl.zst".into(),
+                    key: "bronze/source/market/2026-01-01/present.jsonl.zst".into(),
                     filename: "present.jsonl.zst".into(),
                 },
                 crate::api::SnapshotEntry {
-                    key: "bronze/venue/symbol/2026-01-01/missing.jsonl.zst".into(),
+                    key: "bronze/source/market/2026-01-01/missing.jsonl.zst".into(),
                     filename: "missing.jsonl.zst".into(),
                 },
                 crate::api::SnapshotEntry {
-                    key: "bronze/venue/symbol/2026-01-01/incomplete.jsonl.zst".into(),
+                    key: "bronze/source/market/2026-01-01/incomplete.jsonl.zst".into(),
                     filename: "incomplete.jsonl.zst".into(),
                 },
             ],
@@ -293,8 +293,8 @@ mod tests {
             },
         ];
         let plan = super::SyncPlan {
-            venue: "ex".into(),
-            symbol: "symbol".into(),
+            source: "ex".into(),
+            market: "market".into(),
             requested_range: TimeWindow {
                 from: Utc::now(),
                 to: Utc::now(),
