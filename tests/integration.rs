@@ -15,7 +15,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 
 use polaris::api::{
-    AccountResponse, CatalogAsset, CatalogExchange, CatalogResponse, CliAuthPollResponse,
+    AccountResponse, CatalogResponse, CatalogMarket, CatalogSource, CliAuthPollResponse,
     CliAuthStartResponse, DatasetAccess, DatasetAccessStatus, FeedbackResponse, PolarisClient,
     SnapshotEntry,
 };
@@ -28,20 +28,20 @@ use polaris::syncer::{acquire_sync_lock, execute_sync};
 #[derive(Clone)]
 struct TestServerState {
     base_url: String,
-    exchange: String,
-    asset: String,
+    source: String,
+    market: String,
     coverage: TimeWindow,
     pages: Vec<Vec<SnapshotEntry>>,
     total_bytes: u64,
     files: HashMap<String, Vec<u8>>,
     failures_remaining: Arc<Mutex<HashMap<String, usize>>>,
-    asset_available: bool,
+    market_available: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct SnapshotsQuery {
-    exchange: String,
-    asset: String,
+    source: String,
+    market: String,
     cursor: Option<String>,
 }
 
@@ -53,8 +53,8 @@ struct SnapshotDownloadQuery {
 
 #[derive(Debug, Deserialize)]
 struct CatalogQuery {
-    exchange: Option<String>,
-    asset: Option<String>,
+    source: Option<String>,
+    market: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,8 +82,8 @@ async fn catalog_and_snapshot_pagination_drive_the_plan() {
     let plan = build_sync_plan(
         &client,
         &config,
-        &fixture.exchange,
-        &fixture.asset,
+        &fixture.source,
+        &fixture.market,
         fixture.requested_range(),
     )
     .await
@@ -103,16 +103,16 @@ async fn remote_catalog_can_be_listed_without_filters() {
 
     let catalog = client.fetch_catalog(None, None).await.expect("catalog");
 
-    assert_eq!(catalog.exchanges.len(), 1);
-    assert_eq!(catalog.exchanges[0].id, fixture.exchange);
-    assert_eq!(catalog.exchanges[0].assets.len(), 1);
-    assert_eq!(catalog.exchanges[0].assets[0].id, fixture.asset);
+    assert_eq!(catalog.sources.len(), 1);
+    assert_eq!(catalog.sources[0].id, fixture.source);
+    assert_eq!(catalog.sources[0].markets.len(), 1);
+    assert_eq!(catalog.sources[0].markets[0].id, fixture.market);
 }
 
 #[tokio::test]
-async fn missing_catalog_asset_returns_dataset_unavailable() {
+async fn missing_catalog_market_returns_dataset_unavailable() {
     let mut fixture = SnapshotFixture::basic();
-    fixture.asset_available = false;
+    fixture.market_available = false;
     let server = TestServer::spawn(fixture.clone()).await;
     let tempdir = TempDir::new().expect("tempdir");
     let config = config_for_test(server.base_url(), tempdir.path());
@@ -122,8 +122,8 @@ async fn missing_catalog_asset_returns_dataset_unavailable() {
     let err = build_sync_plan(
         &client,
         &config,
-        &fixture.exchange,
-        &fixture.asset,
+        &fixture.source,
+        &fixture.market,
         fixture.requested_range(),
     )
     .await
@@ -144,8 +144,8 @@ async fn sync_downloads_files_from_standardized_snapshot_urls() {
     let plan = build_sync_plan(
         &client,
         &config,
-        &fixture.exchange,
-        &fixture.asset,
+        &fixture.source,
+        &fixture.market,
         fixture.requested_range(),
     )
     .await
@@ -185,8 +185,8 @@ async fn existing_files_are_skipped_during_sync() {
     let plan = build_sync_plan(
         &client,
         &config,
-        &fixture.exchange,
-        &fixture.asset,
+        &fixture.source,
+        &fixture.market,
         fixture.requested_range(),
     )
     .await
@@ -214,8 +214,8 @@ async fn failed_download_is_retried_and_then_succeeds() {
     let plan = build_sync_plan(
         &client,
         &config,
-        &fixture.exchange,
-        &fixture.asset,
+        &fixture.source,
+        &fixture.market,
         fixture.requested_range(),
     )
     .await
@@ -257,8 +257,8 @@ async fn existing_part_file_is_replaced_cleanly() {
     let plan = build_sync_plan(
         &client,
         &config,
-        &fixture.exchange,
-        &fixture.asset,
+        &fixture.source,
+        &fixture.market,
         fixture.requested_range(),
     )
     .await
@@ -609,20 +609,20 @@ async fn handle_feedback(
 
 #[derive(Clone)]
 struct SnapshotFixture {
-    exchange: String,
-    asset: String,
+    source: String,
+    market: String,
     coverage: TimeWindow,
     pages: Vec<Vec<SnapshotEntry>>,
     files: HashMap<String, Vec<u8>>,
     total_bytes: u64,
     failures_remaining: HashMap<String, usize>,
-    asset_available: bool,
+    market_available: bool,
 }
 
 impl SnapshotFixture {
     fn basic() -> Self {
-        let exchange = "aster".to_string();
-        let asset = "BTCUSDT".to_string();
+        let source = "aster".to_string();
+        let market = "BTCUSDT".to_string();
         let coverage = TimeWindow {
             from: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
             to: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
@@ -645,14 +645,14 @@ impl SnapshotFixture {
         ]);
         let total_bytes = files.values().map(|value| value.len() as u64).sum();
         Self {
-            exchange,
-            asset,
+            source,
+            market,
             coverage,
             pages,
             files,
             total_bytes,
             failures_remaining: HashMap::new(),
-            asset_available: true,
+            market_available: true,
         }
     }
 
@@ -680,14 +680,14 @@ impl TestServer {
         let base_url = format!("http://{addr}");
         let state = TestServerState {
             base_url: base_url.clone(),
-            exchange: fixture.exchange,
-            asset: fixture.asset,
+            source: fixture.source,
+            market: fixture.market,
             coverage: fixture.coverage,
             pages: fixture.pages,
             total_bytes: fixture.total_bytes,
             files: fixture.files,
             failures_remaining: Arc::new(Mutex::new(fixture.failures_remaining)),
-            asset_available: fixture.asset_available,
+            market_available: fixture.market_available,
         };
         let app = Router::new()
             .route("/catalog", get(handle_catalog))
@@ -723,20 +723,20 @@ async fn handle_catalog(
     State(state): State<TestServerState>,
     Query(query): Query<CatalogQuery>,
 ) -> Json<CatalogResponse> {
-    let include_exchange = query
-        .exchange
+    let include_source = query
+        .source
         .as_deref()
-        .is_none_or(|value| value == state.exchange);
-    let include_asset = query
-        .asset
+        .is_none_or(|value| value == state.source);
+    let include_market = query
+        .market
         .as_deref()
-        .is_none_or(|value| value == state.asset);
-    let assets = if state.asset_available && include_exchange && include_asset {
-        vec![CatalogAsset {
-            id: state.asset.clone(),
+        .is_none_or(|value| value == state.market);
+    let markets = if state.market_available && include_source && include_market {
+        vec![CatalogMarket {
+            id: state.market.clone(),
             start: state.coverage.from,
             end: state.coverage.to,
-            source: Some("manifest".into()),
+            catalog_source: Some("manifest".into()),
             categories: Vec::new(),
             access: Some(DatasetAccess {
                 status: DatasetAccessStatus::Preview,
@@ -748,9 +748,9 @@ async fn handle_catalog(
     };
 
     Json(CatalogResponse {
-        exchanges: vec![CatalogExchange {
-            id: query.exchange.unwrap_or(state.exchange.clone()),
-            assets,
+        sources: vec![CatalogSource {
+            id: query.source.unwrap_or(state.source.clone()),
+            markets,
         }],
         updated_at: Some(state.coverage.to.to_rfc3339()),
     })
@@ -760,8 +760,8 @@ async fn handle_snapshots(
     State(state): State<TestServerState>,
     Query(query): Query<SnapshotsQuery>,
 ) -> Json<SnapshotsResponse> {
-    assert_eq!(query.exchange, state.exchange);
-    assert_eq!(query.asset, state.asset);
+    assert_eq!(query.source, state.source);
+    assert_eq!(query.market, state.market);
     let page_index = match query.cursor.as_deref() {
         None => 0,
         Some("page2") => 1,

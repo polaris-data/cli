@@ -168,16 +168,16 @@ fn splash_motif_cell(
         ),
     ];
 
-    for (left, top, rect_width, rect_height, symbol, color) in layers {
+    for (left, top, rect_width, rect_height, glyph, color) in layers {
         let within_x = (col as isize) >= left && (col as isize) < left + rect_width as isize;
         let within_y = (row as isize) >= top && (row as isize) < top + rect_height as isize;
 
         if within_x && within_y {
-            shade = Some((symbol, color, left, top, rect_width, rect_height));
+            shade = Some((glyph, color, left, top, rect_width, rect_height));
         }
     }
 
-    let Some((symbol, color, left, top, rect_width, rect_height)) = shade else {
+    let Some((glyph, color, left, top, rect_width, rect_height)) = shade else {
         return Span::raw(" ");
     };
 
@@ -191,7 +191,7 @@ fn splash_motif_cell(
         Style::default().fg(color)
     };
 
-    Span::styled(symbol.to_string(), style)
+    Span::styled(glyph.to_string(), style)
 }
 
 fn render_browser(frame: &mut ratatui::Frame<'_>, app: &RemoteListTui) {
@@ -686,7 +686,7 @@ pub(crate) fn format_snapshot_location(view: &DatasetView, day: &DayCoverage) ->
         .unwrap_or_else(|| {
             format!(
                 "data/<source>/{}/{}/{}",
-                view.dataset.exchange, view.dataset.asset, day.date
+                view.dataset.source, view.dataset.market, day.date
             )
         });
     if day.local_keys.is_empty() {

@@ -10,11 +10,11 @@ use crate::syncer::SyncProgressEvent;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RemoteDatasetEntry {
-    pub exchange: String,
-    pub asset: String,
+    pub source: String,
+    pub market: String,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
-    pub source: Option<String>,
+    pub catalog_source: Option<String>,
     pub access: Option<DatasetAccess>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub categories: Vec<String>,
@@ -76,7 +76,7 @@ impl RemoteDatasetEntry {
         let haystack = format!(
             "{} {} {} {}",
             self.dataset,
-            self.source.as_deref().unwrap_or_default(),
+            self.catalog_source.as_deref().unwrap_or_default(),
             self.categories.join(" "),
             self.access
                 .as_ref()
@@ -99,8 +99,8 @@ impl RemoteDatasetEntry {
 
 #[derive(Debug, Clone, Default)]
 pub struct RemoteTuiSeed {
-    pub exchange: Option<String>,
-    pub asset: Option<String>,
+    pub source: Option<String>,
+    pub market: Option<String>,
     pub search: Option<String>,
 }
 

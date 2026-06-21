@@ -38,10 +38,10 @@ pub enum Command {
 
 #[derive(Debug, Clone, Args)]
 pub struct DatasetArgs {
-    #[arg(long)]
-    pub exchange: String,
-    #[arg(long)]
-    pub asset: String,
+    #[arg(long = "source")]
+    pub source: String,
+    #[arg(long = "market")]
+    pub market: String,
     #[arg(long)]
     pub from: String,
     #[arg(long)]
@@ -52,10 +52,10 @@ pub struct DatasetArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct RemoteListArgs {
-    #[arg(long)]
-    pub exchange: Option<String>,
-    #[arg(long)]
-    pub asset: Option<String>,
+    #[arg(long = "source")]
+    pub source: Option<String>,
+    #[arg(long = "market")]
+    pub market: Option<String>,
     #[arg(long)]
     pub search: Option<String>,
     #[arg(long, default_value_t = 100)]
@@ -71,10 +71,10 @@ pub struct FeedbackArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct LocalListArgs {
-    #[arg(long)]
-    pub exchange: Option<String>,
-    #[arg(long)]
-    pub asset: Option<String>,
+    #[arg(long = "source")]
+    pub source: Option<String>,
+    #[arg(long = "market")]
+    pub market: Option<String>,
     #[arg(long)]
     pub date: Option<String>,
     #[arg(long)]
@@ -153,9 +153,9 @@ mod tests {
         let cli = Cli::try_parse_from([
             "polaris",
             "download",
-            "--exchange",
+            "--source",
             "aster",
-            "--asset",
+            "--market",
             "BTCUSDT",
             "--from",
             "2026-06-01T00:00:00Z",
