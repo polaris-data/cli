@@ -17,7 +17,6 @@ pub struct TimeWindow {
 #[derive(Debug, Clone)]
 pub struct SnapshotPlan {
     pub key: String,
-    pub filename: String,
     pub local_path: PathBuf,
     pub temp_path: PathBuf,
     pub local_size: u64,
@@ -155,7 +154,6 @@ async fn classify_snapshots(
 
         snapshots.push(SnapshotPlan {
             key: snapshot.key,
-            filename: snapshot.filename,
             local_path,
             temp_path,
             local_size,
@@ -246,15 +244,12 @@ mod tests {
             vec![
                 crate::api::SnapshotEntry {
                     key: "bronze/source/market/2026-01-01/present.jsonl.zst".into(),
-                    filename: "present.jsonl.zst".into(),
                 },
                 crate::api::SnapshotEntry {
                     key: "bronze/source/market/2026-01-01/missing.jsonl.zst".into(),
-                    filename: "missing.jsonl.zst".into(),
                 },
                 crate::api::SnapshotEntry {
                     key: "bronze/source/market/2026-01-01/incomplete.jsonl.zst".into(),
-                    filename: "incomplete.jsonl.zst".into(),
                 },
             ],
         )
@@ -277,7 +272,6 @@ mod tests {
         let snapshots = vec![
             SnapshotPlan {
                 key: "a".into(),
-                filename: "a".into(),
                 local_path: PathBuf::from("/tmp/a"),
                 temp_path: PathBuf::from("/tmp/a.part"),
                 local_size: 5,
@@ -285,7 +279,6 @@ mod tests {
             },
             SnapshotPlan {
                 key: "b".into(),
-                filename: "b".into(),
                 local_path: PathBuf::from("/tmp/b"),
                 temp_path: PathBuf::from("/tmp/b.part"),
                 local_size: 0,

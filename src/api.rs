@@ -221,28 +221,17 @@ struct StandardSnapshotsPageWire {
 struct SnapshotEntryWire {
     #[serde(alias = "path", alias = "name")]
     key: String,
-    #[serde(default)]
-    filename: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct SnapshotEntry {
     pub key: String,
-    pub filename: String,
 }
 
 impl SnapshotEntryWire {
     fn into_snapshot(self) -> Result<SnapshotEntry> {
-        let filename = self
-            .filename
-            .or_else(|| self.key.rsplit('/').next().map(str::to_string))
-            .ok_or_else(|| {
-                TickError::Other(anyhow!("snapshot entry did not include a filename"))
-            })?;
-
         Ok(SnapshotEntry {
             key: self.key,
-            filename,
         })
     }
 }
@@ -429,13 +418,13 @@ impl PolarisClient {
         Ok((all, total_bytes))
     }
 
-    pub async fn download_snapshot(&self, key: &str, filename: &str) -> Result<reqwest::Response> {
+    pub async fn download_snapshot(&self, key: &str) -> Result<reqwest::Response> {
         let url = format!("{}/snapshots/download", self.base_url);
         let response = self
             .authorized(
                 self.download_client
                     .get(url)
-                    .query(&[("key", key), ("filename", filename)]),
+                    .query(&[("key", key)]),
             )
             .send()
             .await
@@ -546,8 +535,7 @@ mod tests {
                 "snapshots":[
                     {
                         "date":"2026-06-01",
-                        "key":"snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst",
-                        "filename":"aster_ASTERUSDT_2026-06-01_standard.jsonl.zst"
+                        "key":"snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst"
                     }
                 ]
             }"#,
@@ -565,10 +553,6 @@ mod tests {
         assert_eq!(
             snapshot.key,
             "snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst"
-        );
-        assert_eq!(
-            snapshot.filename,
-            "aster_ASTERUSDT_2026-06-01_standard.jsonl.zst"
         );
     }
 
@@ -650,7 +634,6 @@ mod tests {
         let snapshot: SnapshotEntryWire = serde_json::from_str(
             r#"{
                 "key":"bronze/aster/ASTERUSDT/2026-06-01/file.jsonl.zst",
-                "filename":"file.jsonl.zst",
                 "downloadUrl":"https://example.test/file.jsonl.zst"
             }"#,
         )
@@ -661,6 +644,5 @@ mod tests {
             snapshot.key,
             "bronze/aster/ASTERUSDT/2026-06-01/file.jsonl.zst"
         );
-        assert_eq!(snapshot.filename, "file.jsonl.zst");
     }
 }

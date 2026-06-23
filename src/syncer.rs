@@ -253,7 +253,7 @@ async fn download_once(
     }
 
     let response = client
-        .download_snapshot(&snapshot.key, &snapshot.filename)
+        .download_snapshot(&snapshot.key)
         .await?;
     let total_bytes = response.content_length();
     if let Some(progress) = progress {

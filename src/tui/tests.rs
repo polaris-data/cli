@@ -684,19 +684,15 @@ fn day_coverages_classify_full_partial_and_empty_days() {
     let remote = vec![
         SnapshotEntry {
             key: "bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into(),
-            filename: "a.jsonl.zst".into(),
         },
         SnapshotEntry {
             key: "bronze/aster/BTCUSDT/2026-06-01/b.jsonl.zst".into(),
-            filename: "b.jsonl.zst".into(),
         },
         SnapshotEntry {
             key: "bronze/aster/BTCUSDT/2026-06-02/c.jsonl.zst".into(),
-            filename: "c.jsonl.zst".into(),
         },
         SnapshotEntry {
             key: "bronze/aster/BTCUSDT/2026-06-03/d.jsonl.zst".into(),
-            filename: "d.jsonl.zst".into(),
         },
     ];
     let local = vec![
@@ -807,7 +803,6 @@ async fn sync_updates_do_not_skip_progress_frames() {
     let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
     let remote_snapshot = SnapshotEntry {
         key: "snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst".into(),
-        filename: "aster_ASTERUSDT_2026-06-01_standard.jsonl.zst".into(),
     };
     let dataset = RemoteDatasetEntry {
         source: "aster".into(),

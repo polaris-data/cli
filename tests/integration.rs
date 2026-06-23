@@ -48,7 +48,6 @@ struct SnapshotsQuery {
 #[derive(Debug, Deserialize)]
 struct SnapshotDownloadQuery {
     key: String,
-    filename: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -632,11 +631,9 @@ impl SnapshotFixture {
         let pages = vec![
             vec![SnapshotEntry {
                 key: key_a.clone(),
-                filename: "a.jsonl.zst".into(),
             }],
             vec![SnapshotEntry {
                 key: key_b.clone(),
-                filename: "b.jsonl.zst".into(),
             }],
         ];
         let files = HashMap::from([
@@ -785,7 +782,6 @@ async fn handle_snapshot_download(
     State(state): State<TestServerState>,
     Query(query): Query<SnapshotDownloadQuery>,
 ) -> Response {
-    let _ = query.filename.as_deref();
     if !state.files.contains_key(&query.key) {
         return (StatusCode::NOT_FOUND, "missing").into_response();
     }
