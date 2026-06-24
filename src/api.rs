@@ -231,6 +231,11 @@ pub struct SnapshotEntry {
     pub date: Option<NaiveDate>,
 }
 
+#[derive(Debug, Deserialize)]
+struct DownloadResponse {
+    url: String,
+}
+
 impl SnapshotEntryWire {
     fn into_snapshot(self) -> Result<SnapshotEntry> {
         Ok(SnapshotEntry {
@@ -423,25 +428,50 @@ impl PolarisClient {
     }
 
     pub async fn download_snapshot(&self, key: &str) -> Result<reqwest::Response> {
-        let url = format!("{}/snapshots/download", self.base_url);
+        let url = format!("{}/download", self.base_url);
         let response = self
             .authorized(
-                self.download_client
-                    .get(url)
+                self.api_client
+                    .get(&url)
                     .query(&[("key", key)]),
             )
             .send()
             .await
-            .with_context(|| format!("snapshot download request failed for {key}"))
+            .with_context(|| format!("download request failed for {key}"))
             .map_err(TickError::Other)?;
 
         let status = response.status();
-        if status.is_success() {
-            return Ok(response);
+        let body = response
+            .text()
+            .await
+            .unwrap_or_default();
+        if !status.is_success() {
+            return Err(http_error(status, body, "download request failed"));
         }
 
-        let body = response.text().await.unwrap_or_default();
-        Err(http_error(status, body, "snapshot download failed"))
+        let download: DownloadResponse =
+            serde_json::from_str(&body).with_context(|| {
+                format!(
+                    "failed to parse download response: {}",
+                    body_snippet(&body)
+                )
+            })?;
+
+        let file_response = self
+            .download_client
+            .get(&download.url)
+            .send()
+            .await
+            .with_context(|| format!("file download failed for {key}"))
+            .map_err(TickError::Other)?;
+
+        let status = file_response.status();
+        if status.is_success() {
+            return Ok(file_response);
+        }
+
+        let body = file_response.text().await.unwrap_or_default();
+        Err(http_error(status, body, "file download failed"))
     }
 
     fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {

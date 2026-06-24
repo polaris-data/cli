@@ -691,7 +691,7 @@ impl TestServer {
         let app = Router::new()
             .route("/catalog", get(handle_catalog))
             .route("/snapshots", get(handle_snapshots))
-            .route("/snapshots/download", get(handle_snapshot_download))
+            .route("/download", get(handle_snapshot_download))
             .route("/files/{*key}", get(handle_file))
             .with_state(state);
 
@@ -788,7 +788,14 @@ async fn handle_snapshot_download(
         return (StatusCode::NOT_FOUND, "missing").into_response();
     }
 
-    axum::response::Redirect::temporary(&format!("{}/files/{}", state.base_url, query.key))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "url": format!("{}/files/{}", state.base_url, query.key),
+            "filename": format!("{}.jsonl.zst", query.key),
+            "expires_in_seconds": 3600,
+        })),
+    )
         .into_response()
 }
 
