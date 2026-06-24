@@ -433,7 +433,7 @@ impl PolarisClient {
             .authorized(
                 self.api_client
                     .get(&url)
-                    .query(&[("key", key)]),
+                    .query(&[("key", key), ("mode", "json")]),
             )
             .send()
             .await
