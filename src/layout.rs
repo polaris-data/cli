@@ -95,33 +95,20 @@ fn parse_opaque_key(key: &str) -> Result<(&str, &str, &str, &str)> {
         ));
     }
 
-    let (first_digit, _) = trimmed
-        .char_indices()
-        .find(|(_, ch)| ch.is_ascii_digit())
-        .ok_or_else(|| {
-            TickError::InvalidArgument(format!("opaque key does not contain a date: {key}"))
-        })?;
+    let date_start = find_date_pattern(trimmed).ok_or_else(|| {
+        TickError::InvalidArgument(format!("opaque key does not contain a date: {key}"))
+    })?;
 
-    if first_digit == 0 || trimmed.as_bytes()[first_digit - 1] != b'-' {
+    if date_start == 0 || trimmed.as_bytes()[date_start - 1] != b'-' {
         return Err(TickError::InvalidArgument(format!(
             "opaque key has unexpected format: {key}"
         )));
     }
 
-    let end = first_digit + 10;
-    if trimmed.len() < end {
-        return Err(TickError::InvalidArgument(format!(
-            "opaque key too short for date: {key}"
-        )));
-    }
+    let date_end = date_start + 10;
+    let date_str = &trimmed[date_start..date_end];
 
-    let date_str = &trimmed[first_digit..end];
-    chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .map_err(|_| {
-            TickError::InvalidArgument(format!("invalid date in opaque key: {key}"))
-        })?;
-
-    let prefix = &trimmed[..first_digit - 1];
+    let prefix = &trimmed[..date_start - 1];
     let first_dash = prefix
         .find('-')
         .ok_or_else(|| {
@@ -137,6 +124,30 @@ fn parse_opaque_key(key: &str) -> Result<(&str, &str, &str, &str)> {
     let source = &prefix[first_dash + 1..last_dash];
     let market = &prefix[last_dash + 1..];
     Ok((tier, source, market, date_str))
+}
+
+fn find_date_pattern(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    for i in 0..bytes.len().saturating_sub(9) {
+        if bytes[i].is_ascii_digit()
+            && bytes[i + 4] == b'-'
+            && bytes[i + 7] == b'-'
+            && bytes[i + 5].is_ascii_digit()
+            && bytes[i + 6].is_ascii_digit()
+            && bytes[i + 8].is_ascii_digit()
+            && bytes[i + 9].is_ascii_digit()
+        {
+            if chrono::NaiveDate::parse_from_str(
+                &text[i..i + 10],
+                "%Y-%m-%d",
+            )
+            .is_ok()
+            {
+                return Some(i);
+            }
+        }
+    }
+    None
 }
 
 fn collect_snapshot_files(
@@ -278,6 +289,19 @@ mod tests {
         assert_eq!(
             infer_date_from_text("raw-aster-ASTERUSDT-2026-06-02-000000"),
             Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 2).unwrap())
+        );
+    }
+
+    #[test]
+    fn opaque_key_parsing_handles_digits_in_market_name() {
+        let path = Layout::new(PathBuf::from("/tmp/tick"))
+            .data_path_for_key("standard-tradexyz-xyz:SP500-2026-06-23-00")
+            .expect("path");
+        assert_eq!(
+            path,
+            PathBuf::from(
+                "/tmp/tick/data/standard/tradexyz/xyz:SP500/2026-06-23/standard-tradexyz-xyz:SP500-2026-06-23-00.jsonl.zst"
+            )
         );
     }
 }
