@@ -924,20 +924,20 @@ mod tests {
             },
             snapshot_total: 1,
             snapshots: vec![LocalSnapshotEntry {
-                key: "bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst".into(),
-                path: "/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst".into(),
-                filename: "file.jsonl.zst".into(),
+                key: "standard-aster-BTCUSDT-2026-06-01-00".into(),
+                path: "/tmp/polaris/data/standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst".into(),
+                filename: "standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst".into(),
                 source: Some("aster".into()),
                 market: Some("BTCUSDT".into()),
                 date: Some("2026-06-01".into()),
-                start: Some(Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap()),
-                end: Some(Utc.with_ymd_and_hms(2026, 6, 1, 0, 9, 59).unwrap()),
+                start: None,
+                end: None,
             }],
         };
         let json = serde_json::to_string(&output).expect("json");
         assert_eq!(
             json,
-            "{\"command\":\"list\",\"root\":\"/tmp/polaris\",\"filters\":{\"source\":\"aster\",\"market\":null,\"date\":null},\"snapshot_total\":1,\"snapshots\":[{\"key\":\"bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"path\":\"/tmp/polaris/data/bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst\",\"filename\":\"file.jsonl.zst\",\"source\":\"aster\",\"market\":\"BTCUSDT\",\"date\":\"2026-06-01\",\"start\":\"2026-06-01T00:00:00Z\",\"end\":\"2026-06-01T00:09:59Z\"}]}"
+            "{\"command\":\"list\",\"root\":\"/tmp/polaris\",\"filters\":{\"source\":\"aster\",\"market\":null,\"date\":null},\"snapshot_total\":1,\"snapshots\":[{\"key\":\"standard-aster-BTCUSDT-2026-06-01-00\",\"path\":\"/tmp/polaris/data/standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst\",\"filename\":\"standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst\",\"source\":\"aster\",\"market\":\"BTCUSDT\",\"date\":\"2026-06-01\",\"start\":null,\"end\":null}]}"
         );
     }
 
@@ -945,9 +945,9 @@ mod tests {
     fn local_list_filters_apply_exact_matches() {
         let entries = vec![
             LocalSnapshotEntry {
-                key: "bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into(),
+                key: "standard-aster-BTCUSDT-2026-06-01-a".into(),
                 path: "/tmp/a".into(),
-                filename: "a.jsonl.zst".into(),
+                filename: "standard-aster-BTCUSDT-2026-06-01-a.jsonl.zst".into(),
                 source: Some("aster".into()),
                 market: Some("BTCUSDT".into()),
                 date: Some("2026-06-01".into()),
@@ -955,9 +955,9 @@ mod tests {
                 end: None,
             },
             LocalSnapshotEntry {
-                key: "bronze/binance/ETHUSDT/2026-06-01/b.jsonl.zst".into(),
+                key: "standard-binance-ETHUSDT-2026-06-01-b".into(),
                 path: "/tmp/b".into(),
-                filename: "b.jsonl.zst".into(),
+                filename: "standard-binance-ETHUSDT-2026-06-01-b.jsonl.zst".into(),
                 source: Some("binance".into()),
                 market: Some("ETHUSDT".into()),
                 date: Some("2026-06-01".into()),
@@ -1154,13 +1154,13 @@ mod tests {
         let layout = Layout::new(root.clone());
 
         let snapshot_path = layout
-            .data_path_for_key("events/aster/BTCUSDT/aster_BTCUSDT_2026-06-01.jsonl.zst")
+            .data_path_for_key("standard-aster-BTCUSDT-2026-06-01-00")
             .expect("snapshot path");
         std::fs::create_dir_all(snapshot_path.parent().expect("parent")).expect("mkdir");
         std::fs::write(&snapshot_path, b"snapshot").expect("write snapshot");
 
         let tmp_path =
-            layout.temp_path_for_key("events/aster/BTCUSDT/aster_BTCUSDT_2026-06-01.jsonl.zst");
+            layout.temp_path_for_key("standard-aster-BTCUSDT-2026-06-01-00");
         std::fs::create_dir_all(tmp_path.parent().expect("parent")).expect("mkdir");
         std::fs::write(&tmp_path, b"partial").expect("write tmp");
 

@@ -221,17 +221,21 @@ struct StandardSnapshotsPageWire {
 struct SnapshotEntryWire {
     #[serde(alias = "path", alias = "name")]
     key: String,
+    #[serde(default)]
+    date: Option<NaiveDate>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct SnapshotEntry {
     pub key: String,
+    pub date: Option<NaiveDate>,
 }
 
 impl SnapshotEntryWire {
     fn into_snapshot(self) -> Result<SnapshotEntry> {
         Ok(SnapshotEntry {
             key: self.key,
+            date: self.date,
         })
     }
 }
@@ -518,7 +522,8 @@ fn to_rfc3339(value: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CatalogResponse, DatasetAccessStatus, SnapshotEntryWire, StandardSnapshotsPageWire,
+        CatalogResponse, DatasetAccessStatus, NaiveDate, SnapshotEntryWire,
+        StandardSnapshotsPageWire,
     };
 
     #[test]
@@ -535,7 +540,7 @@ mod tests {
                 "snapshots":[
                     {
                         "date":"2026-06-01",
-                        "key":"snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst"
+                        "key":"standard-aster-ASTERUSDT-2026-06-01-00"
                     }
                 ]
             }"#,
@@ -552,7 +557,11 @@ mod tests {
             .expect("snapshot should map");
         assert_eq!(
             snapshot.key,
-            "snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst"
+            "standard-aster-ASTERUSDT-2026-06-01-00"
+        );
+        assert_eq!(
+            snapshot.date,
+            Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap())
         );
     }
 
@@ -633,7 +642,7 @@ mod tests {
     fn ignores_legacy_inline_download_urls() {
         let snapshot: SnapshotEntryWire = serde_json::from_str(
             r#"{
-                "key":"bronze/aster/ASTERUSDT/2026-06-01/file.jsonl.zst",
+                "key":"standard-aster-ASTERUSDT-2026-06-01-00",
                 "downloadUrl":"https://example.test/file.jsonl.zst"
             }"#,
         )
@@ -642,7 +651,7 @@ mod tests {
         let snapshot = snapshot.into_snapshot().expect("snapshot should map");
         assert_eq!(
             snapshot.key,
-            "bronze/aster/ASTERUSDT/2026-06-01/file.jsonl.zst"
+            "standard-aster-ASTERUSDT-2026-06-01-00"
         );
     }
 }

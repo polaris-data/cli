@@ -4,7 +4,7 @@ use chrono::{Duration as ChronoDuration, NaiveDate};
 use ratatui::style::Color;
 
 use crate::api::{DatasetAccess, DatasetAccessStatus, SnapshotEntry};
-use crate::layout::{LocalSnapshotEntry, infer_snapshot_date_from_key};
+use crate::layout::{LocalSnapshotEntry, infer_date_from_text};
 
 use super::model::{
     ActiveDaySync, ApiKeyRequirement, BrowserCategory, DatasetView, DayCoverage, DayState,
@@ -92,7 +92,7 @@ pub(crate) fn build_day_coverages(
     }
 
     for snapshot in remote_snapshots {
-        if let Some(date) = snapshot_date_from_key(&snapshot.key) {
+        if let Some(date) = snapshot.date {
             if date >= start_date && date <= end_date {
                 let offset = (date - start_date).num_days() as usize;
                 days[offset].remote_keys.push(snapshot.key);
@@ -101,7 +101,7 @@ pub(crate) fn build_day_coverages(
     }
 
     for key in local_keys {
-        if let Some(date) = snapshot_date_from_key(key) {
+        if let Some(date) = infer_date_from_text(key) {
             if date >= start_date && date <= end_date {
                 let offset = (date - start_date).num_days() as usize;
                 days[offset].local_keys.push(key.clone());
@@ -122,10 +122,6 @@ pub(crate) fn select_initial_day(days: &[DayCoverage]) -> usize {
     days.iter()
         .position(|day| !day.missing_keys.is_empty())
         .unwrap_or(0)
-}
-
-pub(crate) fn snapshot_date_from_key(key: &str) -> Option<NaiveDate> {
-    infer_snapshot_date_from_key(key)
 }
 
 pub(crate) fn compact_count(count: usize) -> String {

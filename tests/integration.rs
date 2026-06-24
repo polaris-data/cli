@@ -626,14 +626,16 @@ impl SnapshotFixture {
             from: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
             to: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
         };
-        let key_a = "bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".to_string();
-        let key_b = "bronze/aster/BTCUSDT/2026-06-01/b.jsonl.zst".to_string();
+        let key_a = "standard-aster-BTCUSDT-2026-06-01-a".to_string();
+        let key_b = "standard-aster-BTCUSDT-2026-06-01-b".to_string();
         let pages = vec![
             vec![SnapshotEntry {
                 key: key_a.clone(),
+                date: Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
             }],
             vec![SnapshotEntry {
                 key: key_b.clone(),
+                date: Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
             }],
         ];
         let files = HashMap::from([
@@ -656,7 +658,7 @@ impl SnapshotFixture {
     fn single() -> Self {
         let mut fixture = Self::basic();
         fixture.pages.truncate(1);
-        fixture.files.retain(|key, _| key.ends_with("a.jsonl.zst"));
+        fixture.files.retain(|key, _| key.ends_with("-a"));
         fixture.total_bytes = fixture.files.values().map(|value| value.len() as u64).sum();
         fixture
     }

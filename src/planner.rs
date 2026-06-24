@@ -221,10 +221,10 @@ mod tests {
         let layout = Layout::new(root.path().to_path_buf());
 
         let present = layout
-            .data_path_for_key("bronze/source/market/2026-01-01/present.jsonl.zst")
+            .data_path_for_key("standard-source-market-2026-01-01-present")
             .expect("present path");
         let incomplete =
-            layout.temp_path_for_key("bronze/source/market/2026-01-01/incomplete.jsonl.zst");
+            layout.temp_path_for_key("standard-source-market-2026-01-01-incomplete");
 
         tokio::fs::create_dir_all(present.parent().expect("present parent"))
             .await
@@ -243,13 +243,16 @@ mod tests {
             &layout,
             vec![
                 crate::api::SnapshotEntry {
-                    key: "bronze/source/market/2026-01-01/present.jsonl.zst".into(),
+                    key: "standard-source-market-2026-01-01-present".into(),
+                    date: None,
                 },
                 crate::api::SnapshotEntry {
-                    key: "bronze/source/market/2026-01-01/missing.jsonl.zst".into(),
+                    key: "standard-source-market-2026-01-01-missing".into(),
+                    date: None,
                 },
                 crate::api::SnapshotEntry {
-                    key: "bronze/source/market/2026-01-01/incomplete.jsonl.zst".into(),
+                    key: "standard-source-market-2026-01-01-incomplete".into(),
+                    date: None,
                 },
             ],
         )

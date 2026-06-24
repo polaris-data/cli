@@ -683,22 +683,26 @@ fn diff_marks_only_missing_remote_keys() {
 fn day_coverages_classify_full_partial_and_empty_days() {
     let remote = vec![
         SnapshotEntry {
-            key: "bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into(),
+            key: "standard-aster-BTCUSDT-2026-06-01-a".into(),
+            date: Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
         },
         SnapshotEntry {
-            key: "bronze/aster/BTCUSDT/2026-06-01/b.jsonl.zst".into(),
+            key: "standard-aster-BTCUSDT-2026-06-01-b".into(),
+            date: Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
         },
         SnapshotEntry {
-            key: "bronze/aster/BTCUSDT/2026-06-02/c.jsonl.zst".into(),
+            key: "standard-aster-BTCUSDT-2026-06-02-c".into(),
+            date: Some(NaiveDate::from_ymd_opt(2026, 6, 2).unwrap()),
         },
         SnapshotEntry {
-            key: "bronze/aster/BTCUSDT/2026-06-03/d.jsonl.zst".into(),
+            key: "standard-aster-BTCUSDT-2026-06-03-d".into(),
+            date: Some(NaiveDate::from_ymd_opt(2026, 6, 3).unwrap()),
         },
     ];
     let local = vec![
-        "bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into(),
-        "bronze/aster/BTCUSDT/2026-06-01/b.jsonl.zst".into(),
-        "bronze/aster/BTCUSDT/2026-06-02/c.jsonl.zst".into(),
+        "standard-aster-BTCUSDT-2026-06-01-a".into(),
+        "standard-aster-BTCUSDT-2026-06-01-b".into(),
+        "standard-aster-BTCUSDT-2026-06-02-c".into(),
     ];
 
     let days = build_day_coverages(
@@ -745,7 +749,7 @@ fn selected_day_summary_reports_snapshot_location() {
         "will store under: data/<source>/aster/BTCUSDT/2026-06-01"
     );
 
-    days[0].local_keys = vec!["bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".into()];
+    days[0].local_keys = vec!["standard-aster-BTCUSDT-2026-06-01-a".into()];
     let view = DatasetView {
         dataset,
         days,
@@ -753,7 +757,7 @@ fn selected_day_summary_reports_snapshot_location() {
     };
     assert_eq!(
         format_snapshot_location(&view, &view.days[0]),
-        "stored under: data/bronze/aster/BTCUSDT/2026-06-01"
+        "stored under: data/standard/aster/BTCUSDT/2026-06-01"
     );
 }
 
@@ -761,7 +765,7 @@ fn selected_day_summary_reports_snapshot_location() {
 fn reveal_target_prefers_exact_snapshot_file() {
     let tempdir = tempfile::TempDir::new().expect("tempdir");
     let data_root = tempdir.path().join("data");
-    let snapshot_path = data_root.join("bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst");
+    let snapshot_path = data_root.join("standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst");
     std::fs::create_dir_all(snapshot_path.parent().expect("parent")).expect("mkdir");
     std::fs::write(&snapshot_path, b"snapshot").expect("write");
 
@@ -775,8 +779,8 @@ fn reveal_target_prefers_exact_snapshot_file() {
 fn reveal_target_falls_back_to_snapshot_directory_when_file_is_missing() {
     let tempdir = tempfile::TempDir::new().expect("tempdir");
     let data_root = tempdir.path().join("data");
-    let snapshot_path = data_root.join("bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst");
-    let day_dir = data_root.join("bronze/aster/BTCUSDT/2026-06-01");
+    let snapshot_path = data_root.join("standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst");
+    let day_dir = data_root.join("standard/aster/BTCUSDT/2026-06-01");
     std::fs::create_dir_all(&day_dir).expect("mkdir");
 
     assert_eq!(
@@ -790,7 +794,7 @@ fn reveal_target_falls_back_to_data_root_when_no_snapshot_parents_exist() {
     let tempdir = tempfile::TempDir::new().expect("tempdir");
     let data_root = tempdir.path().join("data");
     std::fs::create_dir_all(&data_root).expect("mkdir");
-    let snapshot_path = data_root.join("bronze/aster/BTCUSDT/2026-06-01/file.jsonl.zst");
+    let snapshot_path = data_root.join("standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst");
 
     assert_eq!(
         snapshot_reveal_target(&data_root, &[snapshot_path]),
@@ -802,7 +806,8 @@ fn reveal_target_falls_back_to_data_root_when_no_snapshot_parents_exist() {
 async fn sync_updates_do_not_skip_progress_frames() {
     let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
     let remote_snapshot = SnapshotEntry {
-        key: "snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst".into(),
+        key: "standard-aster-ASTERUSDT-2026-06-01-00".into(),
+        date: Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
     };
     let dataset = RemoteDatasetEntry {
         source: "aster".into(),
