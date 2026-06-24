@@ -17,7 +17,6 @@ pub struct TimeWindow {
 #[derive(Debug, Clone)]
 pub struct SnapshotPlan {
     pub key: String,
-    pub filename: String,
     pub local_path: PathBuf,
     pub temp_path: PathBuf,
     pub local_size: u64,
@@ -155,7 +154,6 @@ async fn classify_snapshots(
 
         snapshots.push(SnapshotPlan {
             key: snapshot.key,
-            filename: snapshot.filename,
             local_path,
             temp_path,
             local_size,
@@ -223,10 +221,10 @@ mod tests {
         let layout = Layout::new(root.path().to_path_buf());
 
         let present = layout
-            .data_path_for_key("bronze/source/market/2026-01-01/present.jsonl.zst")
+            .data_path_for_key("standard-source-market-2026-01-01-present")
             .expect("present path");
         let incomplete =
-            layout.temp_path_for_key("bronze/source/market/2026-01-01/incomplete.jsonl.zst");
+            layout.temp_path_for_key("standard-source-market-2026-01-01-incomplete");
 
         tokio::fs::create_dir_all(present.parent().expect("present parent"))
             .await
@@ -245,16 +243,16 @@ mod tests {
             &layout,
             vec![
                 crate::api::SnapshotEntry {
-                    key: "bronze/source/market/2026-01-01/present.jsonl.zst".into(),
-                    filename: "present.jsonl.zst".into(),
+                    key: "standard-source-market-2026-01-01-present".into(),
+                    date: None,
                 },
                 crate::api::SnapshotEntry {
-                    key: "bronze/source/market/2026-01-01/missing.jsonl.zst".into(),
-                    filename: "missing.jsonl.zst".into(),
+                    key: "standard-source-market-2026-01-01-missing".into(),
+                    date: None,
                 },
                 crate::api::SnapshotEntry {
-                    key: "bronze/source/market/2026-01-01/incomplete.jsonl.zst".into(),
-                    filename: "incomplete.jsonl.zst".into(),
+                    key: "standard-source-market-2026-01-01-incomplete".into(),
+                    date: None,
                 },
             ],
         )
@@ -277,7 +275,6 @@ mod tests {
         let snapshots = vec![
             SnapshotPlan {
                 key: "a".into(),
-                filename: "a".into(),
                 local_path: PathBuf::from("/tmp/a"),
                 temp_path: PathBuf::from("/tmp/a.part"),
                 local_size: 5,
@@ -285,7 +282,6 @@ mod tests {
             },
             SnapshotPlan {
                 key: "b".into(),
-                filename: "b".into(),
                 local_path: PathBuf::from("/tmp/b"),
                 temp_path: PathBuf::from("/tmp/b.part"),
                 local_size: 0,

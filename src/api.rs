@@ -222,27 +222,25 @@ struct SnapshotEntryWire {
     #[serde(alias = "path", alias = "name")]
     key: String,
     #[serde(default)]
-    filename: Option<String>,
+    date: Option<NaiveDate>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct SnapshotEntry {
     pub key: String,
-    pub filename: String,
+    pub date: Option<NaiveDate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DownloadResponse {
+    url: String,
 }
 
 impl SnapshotEntryWire {
     fn into_snapshot(self) -> Result<SnapshotEntry> {
-        let filename = self
-            .filename
-            .or_else(|| self.key.rsplit('/').next().map(str::to_string))
-            .ok_or_else(|| {
-                TickError::Other(anyhow!("snapshot entry did not include a filename"))
-            })?;
-
         Ok(SnapshotEntry {
             key: self.key,
-            filename,
+            date: self.date,
         })
     }
 }
@@ -429,26 +427,51 @@ impl PolarisClient {
         Ok((all, total_bytes))
     }
 
-    pub async fn download_snapshot(&self, key: &str, filename: &str) -> Result<reqwest::Response> {
-        let url = format!("{}/snapshots/download", self.base_url);
+    pub async fn download_snapshot(&self, key: &str) -> Result<reqwest::Response> {
+        let url = format!("{}/download", self.base_url);
         let response = self
             .authorized(
-                self.download_client
-                    .get(url)
-                    .query(&[("key", key), ("filename", filename)]),
+                self.api_client
+                    .get(&url)
+                    .query(&[("key", key), ("mode", "json")]),
             )
             .send()
             .await
-            .with_context(|| format!("snapshot download request failed for {key}"))
+            .with_context(|| format!("download request failed for {key}"))
             .map_err(TickError::Other)?;
 
         let status = response.status();
-        if status.is_success() {
-            return Ok(response);
+        let body = response
+            .text()
+            .await
+            .unwrap_or_default();
+        if !status.is_success() {
+            return Err(http_error(status, body, "download request failed"));
         }
 
-        let body = response.text().await.unwrap_or_default();
-        Err(http_error(status, body, "snapshot download failed"))
+        let download: DownloadResponse =
+            serde_json::from_str(&body).with_context(|| {
+                format!(
+                    "failed to parse download response: {}",
+                    body_snippet(&body)
+                )
+            })?;
+
+        let file_response = self
+            .download_client
+            .get(&download.url)
+            .send()
+            .await
+            .with_context(|| format!("file download failed for {key}"))
+            .map_err(TickError::Other)?;
+
+        let status = file_response.status();
+        if status.is_success() {
+            return Ok(file_response);
+        }
+
+        let body = file_response.text().await.unwrap_or_default();
+        Err(http_error(status, body, "file download failed"))
     }
 
     fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -529,7 +552,8 @@ fn to_rfc3339(value: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CatalogResponse, DatasetAccessStatus, SnapshotEntryWire, StandardSnapshotsPageWire,
+        CatalogResponse, DatasetAccessStatus, NaiveDate, SnapshotEntryWire,
+        StandardSnapshotsPageWire,
     };
 
     #[test]
@@ -546,8 +570,7 @@ mod tests {
                 "snapshots":[
                     {
                         "date":"2026-06-01",
-                        "key":"snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst",
-                        "filename":"aster_ASTERUSDT_2026-06-01_standard.jsonl.zst"
+                        "key":"standard-aster-ASTERUSDT-2026-06-01-00"
                     }
                 ]
             }"#,
@@ -564,11 +587,11 @@ mod tests {
             .expect("snapshot should map");
         assert_eq!(
             snapshot.key,
-            "snapshots/standard/aster/ASTERUSDT/2026-06-01.jsonl.zst"
+            "standard-aster-ASTERUSDT-2026-06-01-00"
         );
         assert_eq!(
-            snapshot.filename,
-            "aster_ASTERUSDT_2026-06-01_standard.jsonl.zst"
+            snapshot.date,
+            Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap())
         );
     }
 
@@ -649,8 +672,7 @@ mod tests {
     fn ignores_legacy_inline_download_urls() {
         let snapshot: SnapshotEntryWire = serde_json::from_str(
             r#"{
-                "key":"bronze/aster/ASTERUSDT/2026-06-01/file.jsonl.zst",
-                "filename":"file.jsonl.zst",
+                "key":"standard-aster-ASTERUSDT-2026-06-01-00",
                 "downloadUrl":"https://example.test/file.jsonl.zst"
             }"#,
         )
@@ -659,8 +681,7 @@ mod tests {
         let snapshot = snapshot.into_snapshot().expect("snapshot should map");
         assert_eq!(
             snapshot.key,
-            "bronze/aster/ASTERUSDT/2026-06-01/file.jsonl.zst"
+            "standard-aster-ASTERUSDT-2026-06-01-00"
         );
-        assert_eq!(snapshot.filename, "file.jsonl.zst");
     }
 }

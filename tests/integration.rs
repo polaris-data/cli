@@ -48,7 +48,6 @@ struct SnapshotsQuery {
 #[derive(Debug, Deserialize)]
 struct SnapshotDownloadQuery {
     key: String,
-    filename: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -627,16 +626,16 @@ impl SnapshotFixture {
             from: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
             to: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
         };
-        let key_a = "bronze/aster/BTCUSDT/2026-06-01/a.jsonl.zst".to_string();
-        let key_b = "bronze/aster/BTCUSDT/2026-06-01/b.jsonl.zst".to_string();
+        let key_a = "standard-aster-BTCUSDT-2026-06-01-a".to_string();
+        let key_b = "standard-aster-BTCUSDT-2026-06-01-b".to_string();
         let pages = vec![
             vec![SnapshotEntry {
                 key: key_a.clone(),
-                filename: "a.jsonl.zst".into(),
+                date: Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
             }],
             vec![SnapshotEntry {
                 key: key_b.clone(),
-                filename: "b.jsonl.zst".into(),
+                date: Some(chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
             }],
         ];
         let files = HashMap::from([
@@ -659,7 +658,7 @@ impl SnapshotFixture {
     fn single() -> Self {
         let mut fixture = Self::basic();
         fixture.pages.truncate(1);
-        fixture.files.retain(|key, _| key.ends_with("a.jsonl.zst"));
+        fixture.files.retain(|key, _| key.ends_with("-a"));
         fixture.total_bytes = fixture.files.values().map(|value| value.len() as u64).sum();
         fixture
     }
@@ -692,7 +691,7 @@ impl TestServer {
         let app = Router::new()
             .route("/catalog", get(handle_catalog))
             .route("/snapshots", get(handle_snapshots))
-            .route("/snapshots/download", get(handle_snapshot_download))
+            .route("/download", get(handle_snapshot_download))
             .route("/files/{*key}", get(handle_file))
             .with_state(state);
 
@@ -785,12 +784,18 @@ async fn handle_snapshot_download(
     State(state): State<TestServerState>,
     Query(query): Query<SnapshotDownloadQuery>,
 ) -> Response {
-    let _ = query.filename.as_deref();
     if !state.files.contains_key(&query.key) {
         return (StatusCode::NOT_FOUND, "missing").into_response();
     }
 
-    axum::response::Redirect::temporary(&format!("{}/files/{}", state.base_url, query.key))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "url": format!("{}/files/{}", state.base_url, query.key),
+            "filename": format!("{}.jsonl.zst", query.key),
+            "expires_in_seconds": 3600,
+        })),
+    )
         .into_response()
 }
 
