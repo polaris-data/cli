@@ -22,7 +22,7 @@ use crate::error::{Result, TickError};
 use crate::layout::{Layout, LocalSnapshotEntry};
 use crate::planner::{SyncPlan, TimeWindow, build_sync_plan};
 use crate::syncer::{SyncExecution, acquire_sync_lock, execute_sync, layout_for_root};
-use crate::tui::open_url;
+use crate::tui::{clear_bookmarks, open_url};
 use crate::tui::{RemoteDatasetEntry, RemoteTuiSeed, can_render_tui, run_remote_list_tui};
 
 const UPDATE_INSTALLER_URL: &str =
@@ -480,6 +480,7 @@ async fn run_reset(config: &Config, args: ResetArgs) -> Result<u8> {
             removed_roots.push(root.display().to_string());
         }
     }
+    clear_bookmarks(layout.root())?;
 
     let output = ResetOutput {
         command: "reset",
@@ -876,7 +877,7 @@ mod tests {
     use crate::config::Config;
     use crate::layout::{Layout, LocalSnapshotEntry};
     use crate::syncer::FailedDownload;
-    use crate::tui::RemoteDatasetEntry;
+    use crate::tui::{RemoteDatasetEntry, load_bookmarks, save_bookmarks};
 
     #[test]
     fn remote_list_json_shape_is_stable() {
@@ -1159,6 +1160,9 @@ mod tests {
         std::fs::create_dir_all(cache_path.parent().expect("parent")).expect("mkdir");
         std::fs::write(&cache_path, b"cache").expect("write cache");
 
+        save_bookmarks(&root, &BTreeSet::from(["aster:BTCUSDT".to_string()]))
+            .expect("save bookmarks");
+
         let exit_code = run_reset(&config, ResetArgs { json: false })
             .await
             .expect("reset");
@@ -1168,6 +1172,7 @@ mod tests {
         assert!(!layout.tmp_root().exists());
         assert!(!layout.cache_root().exists());
         assert!(layout.root().exists());
+        assert_eq!(load_bookmarks(&root).expect("load bookmarks"), BTreeSet::new());
         assert_eq!(layout.list_local_snapshots().expect("snapshots").len(), 0);
 
         let remaining_roots = [layout.data_root(), layout.tmp_root(), layout.cache_root()]
