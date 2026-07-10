@@ -195,14 +195,18 @@ mod tests {
         let mut cmd = Cli::command();
         let help = cmd.render_help().to_string();
 
+        assert!(help.contains(
+            "Running `polaris` with no command opens the interactive dataset browser TUI."
+        ));
         assert!(
-            help.contains("Running `polaris` with no command opens the interactive dataset browser TUI.")
+            help.contains("account   Print the current Polaris auth state and account details")
         );
-        assert!(help.contains("account   Print the current Polaris auth state and account details"));
         assert!(help.contains("catalog   List remote datasets available from Polaris"));
         assert!(help.contains("feedback  Send product feedback to the Polaris team"));
         assert!(help.contains("key       Store a Polaris API key from a secure prompt"));
-        assert!(help.contains("login     Sign in through the browser and store the returned API key"));
+        assert!(
+            help.contains("login     Sign in through the browser and store the returned API key")
+        );
         assert!(help.contains("list      List local snapshots under the configured root"));
         assert!(help.contains("download  Download missing snapshots for a dataset and time range"));
         assert!(help.contains("reset     Remove all local dataset state managed by Polaris"));

@@ -81,24 +81,20 @@ pub struct AccountSubscription {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(from = "CatalogResponseWire")]
 pub struct CatalogResponse {
-    pub sources: Vec<CatalogSource>,
+    pub markets: Vec<CatalogMarket>,
     #[serde(rename = "updatedAt")]
     pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct CatalogSource {
-    pub id: String,
-    pub markets: Vec<CatalogMarket>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CatalogMarket {
-    pub id: String,
+    pub source: String,
+    pub market: String,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
-    #[serde(rename = "source")]
+    #[serde(rename = "source_type", default)]
     pub catalog_source: Option<String>,
     #[serde(
         default,
@@ -108,6 +104,69 @@ pub struct CatalogMarket {
     pub categories: Vec<String>,
     #[serde(default)]
     pub access: Option<DatasetAccess>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CatalogResponseWire {
+    #[serde(default)]
+    markets: Vec<CatalogMarket>,
+    #[serde(default)]
+    sources: Vec<LegacyCatalogSource>,
+    #[serde(rename = "updatedAt")]
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyCatalogSource {
+    id: String,
+    #[serde(default)]
+    markets: Vec<LegacyCatalogMarket>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyCatalogMarket {
+    id: String,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    #[serde(rename = "source")]
+    catalog_source: Option<String>,
+    #[serde(
+        default,
+        alias = "category",
+        deserialize_with = "deserialize_catalog_categories"
+    )]
+    categories: Vec<String>,
+    #[serde(default)]
+    access: Option<DatasetAccess>,
+}
+
+impl From<CatalogResponseWire> for CatalogResponse {
+    fn from(value: CatalogResponseWire) -> Self {
+        let markets = if value.markets.is_empty() {
+            value
+                .sources
+                .into_iter()
+                .flat_map(|source| {
+                    source.markets.into_iter().map(move |market| CatalogMarket {
+                        source: source.id.clone(),
+                        market: market.id,
+                        start: market.start,
+                        end: market.end,
+                        catalog_source: market.catalog_source,
+                        categories: market.categories,
+                        access: market.access,
+                    })
+                })
+                .collect()
+        } else {
+            value.markets
+        };
+
+        Self {
+            markets,
+            updated_at: value.updated_at,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -441,21 +500,14 @@ impl PolarisClient {
             .map_err(TickError::Other)?;
 
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_default();
+        let body = response.text().await.unwrap_or_default();
         if !status.is_success() {
             return Err(http_error(status, body, "download request failed"));
         }
 
-        let download: DownloadResponse =
-            serde_json::from_str(&body).with_context(|| {
-                format!(
-                    "failed to parse download response: {}",
-                    body_snippet(&body)
-                )
-            })?;
+        let download: DownloadResponse = serde_json::from_str(&body).with_context(|| {
+            format!("failed to parse download response: {}", body_snippet(&body))
+        })?;
 
         let file_response = self
             .download_client
@@ -585,10 +637,7 @@ mod tests {
             .expect("snapshot entry")
             .into_snapshot()
             .expect("snapshot should map");
-        assert_eq!(
-            snapshot.key,
-            "standard-aster-ASTERUSDT-2026-06-01-00"
-        );
+        assert_eq!(snapshot.key, "standard-aster-ASTERUSDT-2026-06-01-00");
         assert_eq!(
             snapshot.date,
             Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap())
@@ -599,21 +648,17 @@ mod tests {
     fn parses_catalog_access_shape() {
         let catalog: CatalogResponse = serde_json::from_str(
             r#"{
-                "sources":[
+                "markets":[
                     {
-                        "id":"aster",
-                        "markets":[
-                            {
-                                "id":"ASTERUSDT",
-                                "start":"2026-05-18T14:16:33.886Z",
-                                "end":"2026-06-03T13:10:01.561Z",
-                                "source":"manifest",
-                                "access":{
-                                    "status":"preview",
-                                    "public_cutoff_date":"2026-05-28"
-                                }
-                            }
-                        ]
+                        "source":"aster",
+                        "market":"ASTERUSDT",
+                        "start":"2026-05-18T14:16:33.886Z",
+                        "end":"2026-06-03T13:10:01.561Z",
+                        "source_type":"manifest",
+                        "access":{
+                            "status":"preview",
+                            "public_cutoff_date":"2026-05-28"
+                        }
                     }
                 ],
                 "updatedAt":"2026-06-03T13:15:37.917Z"
@@ -621,7 +666,10 @@ mod tests {
         )
         .expect("catalog should parse");
 
-        let access = catalog.sources[0].markets[0]
+        assert_eq!(catalog.markets.len(), 1);
+        assert_eq!(catalog.markets[0].source, "aster");
+        assert_eq!(catalog.markets[0].market, "ASTERUSDT");
+        let access = catalog.markets[0]
             .access
             .as_ref()
             .expect("access should parse");
@@ -636,36 +684,62 @@ mod tests {
     fn parses_catalog_categories_from_string_or_array() {
         let catalog: CatalogResponse = serde_json::from_str(
             r#"{
-                "sources":[
+                "markets":[
                     {
-                        "id":"aster",
-                        "markets":[
-                            {
-                                "id":"ASTERUSDT",
-                                "start":"2026-05-18T14:16:33.886Z",
-                                "end":"2026-06-03T13:10:01.561Z",
-                                "source":"manifest",
-                                "category":"Bookmarks"
-                            },
-                            {
-                                "id":"BTCUSDT",
-                                "start":"2026-05-18T14:16:33.886Z",
-                                "end":"2026-06-03T13:10:01.561Z",
-                                "source":"manifest",
-                                "categories":["Futures","Top Volume"]
-                            }
-                        ]
+                        "source":"aster",
+                        "market":"ASTERUSDT",
+                        "start":"2026-05-18T14:16:33.886Z",
+                        "end":"2026-06-03T13:10:01.561Z",
+                        "source_type":"manifest",
+                        "category":"Bookmarks"
+                    },
+                    {
+                        "source":"aster",
+                        "market":"BTCUSDT",
+                        "start":"2026-05-18T14:16:33.886Z",
+                        "end":"2026-06-03T13:10:01.561Z",
+                        "source_type":"manifest",
+                        "categories":["Futures","Top Volume"]
                     }
                 ]
             }"#,
         )
         .expect("catalog should parse");
 
-        assert_eq!(catalog.sources[0].markets[0].categories, vec!["Bookmarks"]);
+        assert_eq!(catalog.markets[0].categories, vec!["Bookmarks"]);
+        assert_eq!(catalog.markets[1].categories, vec!["Futures", "Top Volume"]);
+    }
+
+    #[test]
+    fn parses_legacy_nested_catalog_shape() {
+        let catalog: CatalogResponse = serde_json::from_str(
+            r#"{
+                "sources":[
+                    {
+                        "id":"aster",
+                        "markets":[
+                            {
+                                "id":"BTCUSDT",
+                                "start":"2026-05-18T14:16:33.886Z",
+                                "end":"2026-06-03T13:10:01.561Z",
+                                "source":"manifest",
+                                "categories":["Futures"]
+                            }
+                        ]
+                    }
+                ]
+            }"#,
+        )
+        .expect("legacy catalog should parse");
+
+        assert_eq!(catalog.markets.len(), 1);
+        assert_eq!(catalog.markets[0].source, "aster");
+        assert_eq!(catalog.markets[0].market, "BTCUSDT");
         assert_eq!(
-            catalog.sources[0].markets[1].categories,
-            vec!["Futures", "Top Volume"]
+            catalog.markets[0].catalog_source.as_deref(),
+            Some("manifest")
         );
+        assert_eq!(catalog.markets[0].categories, vec!["Futures"]);
     }
 
     #[test]
@@ -679,9 +753,6 @@ mod tests {
         .expect("snapshot should parse");
 
         let snapshot = snapshot.into_snapshot().expect("snapshot should map");
-        assert_eq!(
-            snapshot.key,
-            "standard-aster-ASTERUSDT-2026-06-01-00"
-        );
+        assert_eq!(snapshot.key, "standard-aster-ASTERUSDT-2026-06-01-00");
     }
 }

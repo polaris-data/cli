@@ -11,7 +11,7 @@ use serde::Serialize;
 use tokio::time::{Duration as TokioDuration, sleep};
 use tracing_subscriber::EnvFilter;
 
-use crate::api::{CatalogSource, CliAuthPollResponse, PolarisClient};
+use crate::api::{CatalogMarket, CliAuthPollResponse, PolarisClient};
 use crate::auth::{CredentialStore, KeychainCredentialStore};
 use crate::cli::{
     Cli, Command, DatasetArgs, DownloadArgs, FeedbackArgs, LocalListArgs, RemoteListArgs,
@@ -439,7 +439,7 @@ async fn run_catalog(
         .fetch_catalog(args.source.as_deref(), args.market.as_deref())
         .await?;
     let filters = RemoteListFilters::from_args(&args);
-    let entries = filter_remote_catalog(catalog.sources, &filters, args.limit);
+    let entries = filter_remote_catalog(catalog.markets, &filters, args.limit);
     if args.json || !prefer_tui || !can_render_tui() {
         let output = RemoteListOutput::from_entries(filters, entries);
         emit_output(args.json, &output)?;
@@ -720,39 +720,36 @@ fn filter_local_list_entries(
 }
 
 fn filter_remote_catalog(
-    sources: Vec<CatalogSource>,
+    markets: Vec<CatalogMarket>,
     filters: &RemoteListFilters,
     limit: usize,
 ) -> Vec<RemoteDatasetEntry> {
     let mut datasets = Vec::new();
 
-    for source in sources {
-        let source_id = source.id;
-        for market in source.markets {
-            let dataset = format!("{}:{}", source_id, market.id);
-            if !matches_exact(Some(source_id.as_str()), filters.source.as_deref()) {
-                continue;
-            }
-            if !matches_exact(Some(market.id.as_str()), filters.market.as_deref()) {
-                continue;
-            }
-            let entry = RemoteDatasetEntry {
-                source: source_id.clone(),
-                market: market.id.clone(),
-                start: market.start,
-                end: market.end,
-                catalog_source: market.catalog_source.clone(),
-                access: market.access.clone(),
-                categories: market.categories.clone(),
-                dataset,
-            };
-            if let Some(search) = filters.search.as_deref()
-                && !entry.matches_search(search)
-            {
-                continue;
-            }
-            datasets.push(entry);
+    for market in markets {
+        let dataset = format!("{}:{}", market.source, market.market);
+        if !matches_exact(Some(market.source.as_str()), filters.source.as_deref()) {
+            continue;
         }
+        if !matches_exact(Some(market.market.as_str()), filters.market.as_deref()) {
+            continue;
+        }
+        let entry = RemoteDatasetEntry {
+            source: market.source.clone(),
+            market: market.market.clone(),
+            start: market.start,
+            end: market.end,
+            catalog_source: market.catalog_source.clone(),
+            access: market.access.clone(),
+            categories: market.categories.clone(),
+            dataset,
+        };
+        if let Some(search) = filters.search.as_deref()
+            && !entry.matches_search(search)
+        {
+            continue;
+        }
+        datasets.push(entry);
     }
 
     datasets.sort_by(|left, right| {
@@ -874,7 +871,7 @@ mod tests {
         SyncOutput, TimeWindow, filter_local_list_entries, filter_remote_catalog,
         infer_install_dir_from_executable, looks_like_cargo_target_dir, run_reset,
     };
-    use crate::api::{CatalogMarket, CatalogSource, DatasetAccess, DatasetAccessStatus};
+    use crate::api::{CatalogMarket, DatasetAccess, DatasetAccessStatus};
     use crate::cli::ResetArgs;
     use crate::config::Config;
     use crate::layout::{Layout, LocalSnapshotEntry};
@@ -1025,48 +1022,43 @@ mod tests {
     fn remote_list_filters_apply_search_and_limit() {
         let datasets = filter_remote_catalog(
             vec![
-                CatalogSource {
-                    id: "aster".into(),
-                    markets: vec![
-                        CatalogMarket {
-                            id: "BTCUSDT".into(),
-                            start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
-                            end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-                            catalog_source: Some("manifest".into()),
-                            categories: Vec::new(),
-                            access: Some(DatasetAccess {
-                                status: DatasetAccessStatus::Restricted,
-                                public_cutoff_date: None,
-                            }),
-                        },
-                        CatalogMarket {
-                            id: "ETHUSDT".into(),
-                            start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
-                            end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-                            catalog_source: Some("manifest".into()),
-                            categories: Vec::new(),
-                            access: Some(DatasetAccess {
-                                status: DatasetAccessStatus::Open,
-                                public_cutoff_date: None,
-                            }),
-                        },
-                    ],
+                CatalogMarket {
+                    source: "aster".into(),
+                    market: "BTCUSDT".into(),
+                    start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                    end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                    catalog_source: Some("manifest".into()),
+                    categories: Vec::new(),
+                    access: Some(DatasetAccess {
+                        status: DatasetAccessStatus::Restricted,
+                        public_cutoff_date: None,
+                    }),
                 },
-                CatalogSource {
-                    id: "binance".into(),
-                    markets: vec![CatalogMarket {
-                        id: "BTCUSDT".into(),
-                        start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
-                        end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
-                        catalog_source: Some("manifest".into()),
-                        categories: Vec::new(),
-                        access: Some(DatasetAccess {
-                            status: DatasetAccessStatus::Preview,
-                            public_cutoff_date: Some(
-                                chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
-                            ),
-                        }),
-                    }],
+                CatalogMarket {
+                    source: "aster".into(),
+                    market: "ETHUSDT".into(),
+                    start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                    end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                    catalog_source: Some("manifest".into()),
+                    categories: Vec::new(),
+                    access: Some(DatasetAccess {
+                        status: DatasetAccessStatus::Open,
+                        public_cutoff_date: None,
+                    }),
+                },
+                CatalogMarket {
+                    source: "binance".into(),
+                    market: "BTCUSDT".into(),
+                    start: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+                    end: Utc.with_ymd_and_hms(2026, 6, 2, 0, 0, 0).unwrap(),
+                    catalog_source: Some("manifest".into()),
+                    categories: Vec::new(),
+                    access: Some(DatasetAccess {
+                        status: DatasetAccessStatus::Preview,
+                        public_cutoff_date: Some(
+                            chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
+                        ),
+                    }),
                 },
             ],
             &RemoteListFilters {
@@ -1159,8 +1151,7 @@ mod tests {
         std::fs::create_dir_all(snapshot_path.parent().expect("parent")).expect("mkdir");
         std::fs::write(&snapshot_path, b"snapshot").expect("write snapshot");
 
-        let tmp_path =
-            layout.temp_path_for_key("standard-aster-BTCUSDT-2026-06-01-00");
+        let tmp_path = layout.temp_path_for_key("standard-aster-BTCUSDT-2026-06-01-00");
         std::fs::create_dir_all(tmp_path.parent().expect("parent")).expect("mkdir");
         std::fs::write(&tmp_path, b"partial").expect("write tmp");
 

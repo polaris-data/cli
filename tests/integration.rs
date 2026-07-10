@@ -15,9 +15,8 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 
 use polaris::api::{
-    AccountResponse, CatalogResponse, CatalogMarket, CatalogSource, CliAuthPollResponse,
-    CliAuthStartResponse, DatasetAccess, DatasetAccessStatus, FeedbackResponse, PolarisClient,
-    SnapshotEntry,
+    AccountResponse, CatalogMarket, CatalogResponse, CliAuthPollResponse, CliAuthStartResponse,
+    DatasetAccess, DatasetAccessStatus, FeedbackResponse, PolarisClient, SnapshotEntry,
 };
 use polaris::config::Config;
 use polaris::error::TickError;
@@ -102,10 +101,9 @@ async fn remote_catalog_can_be_listed_without_filters() {
 
     let catalog = client.fetch_catalog(None, None).await.expect("catalog");
 
-    assert_eq!(catalog.sources.len(), 1);
-    assert_eq!(catalog.sources[0].id, fixture.source);
-    assert_eq!(catalog.sources[0].markets.len(), 1);
-    assert_eq!(catalog.sources[0].markets[0].id, fixture.market);
+    assert_eq!(catalog.markets.len(), 1);
+    assert_eq!(catalog.markets[0].source, fixture.source);
+    assert_eq!(catalog.markets[0].market, fixture.market);
 }
 
 #[tokio::test]
@@ -732,7 +730,8 @@ async fn handle_catalog(
         .is_none_or(|value| value == state.market);
     let markets = if state.market_available && include_source && include_market {
         vec![CatalogMarket {
-            id: state.market.clone(),
+            source: query.source.unwrap_or(state.source.clone()),
+            market: state.market.clone(),
             start: state.coverage.from,
             end: state.coverage.to,
             catalog_source: Some("manifest".into()),
@@ -747,10 +746,7 @@ async fn handle_catalog(
     };
 
     Json(CatalogResponse {
-        sources: vec![CatalogSource {
-            id: query.source.unwrap_or(state.source.clone()),
-            markets,
-        }],
+        markets,
         updated_at: Some(state.coverage.to.to_rfc3339()),
     })
 }

@@ -111,14 +111,10 @@ fn parse_opaque_key(key: &str) -> Result<(&str, &str, &str, &str)> {
     let prefix = &trimmed[..date_start - 1];
     let first_dash = prefix
         .find('-')
-        .ok_or_else(|| {
-            TickError::InvalidArgument(format!("invalid opaque key prefix: {key}"))
-        })?;
+        .ok_or_else(|| TickError::InvalidArgument(format!("invalid opaque key prefix: {key}")))?;
     let last_dash = prefix
         .rfind('-')
-        .ok_or_else(|| {
-            TickError::InvalidArgument(format!("invalid opaque key prefix: {key}"))
-        })?;
+        .ok_or_else(|| TickError::InvalidArgument(format!("invalid opaque key prefix: {key}")))?;
 
     let tier = &prefix[..first_dash];
     let source = &prefix[first_dash + 1..last_dash];
@@ -137,12 +133,7 @@ fn find_date_pattern(text: &str) -> Option<usize> {
             && bytes[i + 8].is_ascii_digit()
             && bytes[i + 9].is_ascii_digit()
         {
-            if chrono::NaiveDate::parse_from_str(
-                &text[i..i + 10],
-                "%Y-%m-%d",
-            )
-            .is_ok()
-            {
+            if chrono::NaiveDate::parse_from_str(&text[i..i + 10], "%Y-%m-%d").is_ok() {
                 return Some(i);
             }
         }
@@ -227,9 +218,7 @@ pub fn infer_date_from_text(text: &str) -> Option<chrono::NaiveDate> {
     None
 }
 
-fn infer_local_metadata(
-    relative_path: &str,
-) -> (Option<String>, Option<String>, Option<String>) {
+fn infer_local_metadata(relative_path: &str) -> (Option<String>, Option<String>, Option<String>) {
     let segments: Vec<&str> = relative_path.split('/').collect();
     if segments.len() >= 5 {
         let source = Some(segments[1].to_string());

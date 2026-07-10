@@ -252,9 +252,7 @@ async fn download_once(
             .map_err(TickError::Other)?;
     }
 
-    let response = client
-        .download_snapshot(&snapshot.key)
-        .await?;
+    let response = client.download_snapshot(&snapshot.key).await?;
     let total_bytes = response.content_length();
     if let Some(progress) = progress {
         let _ = progress.send(SyncProgressEvent::Started {
