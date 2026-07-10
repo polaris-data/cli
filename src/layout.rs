@@ -109,16 +109,21 @@ fn parse_opaque_key(key: &str) -> Result<(&str, &str, &str, &str)> {
     let date_str = &trimmed[date_start..date_end];
 
     let prefix = &trimmed[..date_start - 1];
-    let first_dash = prefix
-        .find('-')
+    let mut parts = prefix.splitn(3, '-');
+    let tier = parts
+        .next()
         .ok_or_else(|| TickError::InvalidArgument(format!("invalid opaque key prefix: {key}")))?;
-    let last_dash = prefix
-        .rfind('-')
+    let source = parts
+        .next()
         .ok_or_else(|| TickError::InvalidArgument(format!("invalid opaque key prefix: {key}")))?;
-
-    let tier = &prefix[..first_dash];
-    let source = &prefix[first_dash + 1..last_dash];
-    let market = &prefix[last_dash + 1..];
+    let market = parts
+        .next()
+        .ok_or_else(|| TickError::InvalidArgument(format!("invalid opaque key prefix: {key}")))?;
+    if tier.is_empty() || source.is_empty() || market.is_empty() {
+        return Err(TickError::InvalidArgument(format!(
+            "invalid opaque key prefix: {key}"
+        )));
+    }
     Ok((tier, source, market, date_str))
 }
 
@@ -219,6 +224,17 @@ pub fn infer_date_from_text(text: &str) -> Option<chrono::NaiveDate> {
 }
 
 fn infer_local_metadata(relative_path: &str) -> (Option<String>, Option<String>, Option<String>) {
+    if let Some(filename) = relative_path.rsplit('/').next() {
+        let key = filename.strip_suffix(".jsonl.zst").unwrap_or(filename);
+        if let Ok((_, source, market, date)) = parse_opaque_key(key) {
+            return (
+                Some(source.to_string()),
+                Some(market.to_string()),
+                Some(date.to_string()),
+            );
+        }
+    }
+
     let segments: Vec<&str> = relative_path.split('/').collect();
     if segments.len() >= 5 {
         let source = Some(segments[1].to_string());
@@ -292,5 +308,37 @@ mod tests {
                 "/tmp/tick/data/standard/tradexyz/xyz:SP500/2026-06-23/standard-tradexyz-xyz:SP500-2026-06-23-00.jsonl.zst"
             )
         );
+    }
+
+    #[test]
+    fn opaque_key_parsing_handles_dashes_in_market_name() {
+        let path = Layout::new(PathBuf::from("/tmp/tick"))
+            .data_path_for_key("standard-arcus-AAPL-USD-2026-07-10-00")
+            .expect("path");
+        assert_eq!(
+            path,
+            PathBuf::from(
+                "/tmp/tick/data/standard/arcus/AAPL-USD/2026-07-10/standard-arcus-AAPL-USD-2026-07-10-00.jsonl.zst"
+            )
+        );
+    }
+
+    #[test]
+    fn local_listing_prefers_key_metadata_over_legacy_directory_split() {
+        let tempdir = tempfile::TempDir::new().expect("tempdir");
+        let file = tempdir.path().join(
+            "data/standard/arcus-AAPL/USD/2026-07-10/standard-arcus-AAPL-USD-2026-07-10-00.jsonl.zst",
+        );
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&file, b"snapshot").expect("write");
+
+        let entries = Layout::new(tempdir.path().to_path_buf())
+            .list_local_snapshots()
+            .expect("entries");
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.source.as_deref(), Some("arcus"));
+        assert_eq!(entry.market.as_deref(), Some("AAPL-USD"));
+        assert_eq!(entry.date.as_deref(), Some("2026-07-10"));
     }
 }
