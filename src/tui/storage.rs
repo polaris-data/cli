@@ -43,6 +43,15 @@ pub(crate) fn save_bookmarks(root: &Path, bookmarks: &BTreeSet<String>) -> Resul
     fs::write(&path, contents).map_err(|err| TickError::Other(err.into()))
 }
 
+pub(crate) fn clear_bookmarks(root: &Path) -> Result<()> {
+    let path = bookmarks_path(root);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    save_bookmarks(root, &BTreeSet::new())
+}
+
 pub(crate) fn load_account_identity(root: &Path) -> Result<Option<AccountIdentity>> {
     let path = account_identity_path(root);
     let contents = match fs::read_to_string(&path) {

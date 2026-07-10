@@ -194,7 +194,7 @@ polaris download \
 
 ### `polaris reset`
 
-Removes all local dataset state managed by Polaris under the configured root.
+Removes all local dataset state managed by Polaris under the configured root and clears saved bookmarks.
 
 ```bash
 polaris reset
