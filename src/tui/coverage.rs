@@ -16,8 +16,7 @@ pub(crate) fn summarize_local_snapshots(
 ) -> BTreeMap<String, LocalDatasetSummary> {
     let mut summaries = BTreeMap::new();
     for snapshot in snapshots {
-        let (Some(source), Some(market)) =
-            (snapshot.source.as_deref(), snapshot.market.as_deref())
+        let (Some(source), Some(market)) = (snapshot.source.as_deref(), snapshot.market.as_deref())
         else {
             continue;
         };

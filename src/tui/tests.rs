@@ -765,7 +765,8 @@ fn selected_day_summary_reports_snapshot_location() {
 fn reveal_target_prefers_exact_snapshot_file() {
     let tempdir = tempfile::TempDir::new().expect("tempdir");
     let data_root = tempdir.path().join("data");
-    let snapshot_path = data_root.join("standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst");
+    let snapshot_path = data_root
+        .join("standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst");
     std::fs::create_dir_all(snapshot_path.parent().expect("parent")).expect("mkdir");
     std::fs::write(&snapshot_path, b"snapshot").expect("write");
 
@@ -779,7 +780,8 @@ fn reveal_target_prefers_exact_snapshot_file() {
 fn reveal_target_falls_back_to_snapshot_directory_when_file_is_missing() {
     let tempdir = tempfile::TempDir::new().expect("tempdir");
     let data_root = tempdir.path().join("data");
-    let snapshot_path = data_root.join("standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst");
+    let snapshot_path = data_root
+        .join("standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst");
     let day_dir = data_root.join("standard/aster/BTCUSDT/2026-06-01");
     std::fs::create_dir_all(&day_dir).expect("mkdir");
 
@@ -794,7 +796,8 @@ fn reveal_target_falls_back_to_data_root_when_no_snapshot_parents_exist() {
     let tempdir = tempfile::TempDir::new().expect("tempdir");
     let data_root = tempdir.path().join("data");
     std::fs::create_dir_all(&data_root).expect("mkdir");
-    let snapshot_path = data_root.join("standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst");
+    let snapshot_path = data_root
+        .join("standard/aster/BTCUSDT/2026-06-01/standard-aster-BTCUSDT-2026-06-01-00.jsonl.zst");
 
     assert_eq!(
         snapshot_reveal_target(&data_root, &[snapshot_path]),

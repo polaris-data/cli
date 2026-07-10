@@ -169,10 +169,9 @@ fn find_market_coverage<'a>(
     market: &str,
 ) -> Option<&'a crate::api::CatalogMarket> {
     catalog
-        .sources
+        .markets
         .iter()
-        .find(|entry| entry.id == source)
-        .and_then(|entry| entry.markets.iter().find(|candidate| candidate.id == market))
+        .find(|entry| entry.source == source && entry.market == market)
 }
 
 pub fn intersect_ranges(requested: &TimeWindow, available: &TimeWindow) -> Option<TimeWindow> {
@@ -223,8 +222,7 @@ mod tests {
         let present = layout
             .data_path_for_key("standard-source-market-2026-01-01-present")
             .expect("present path");
-        let incomplete =
-            layout.temp_path_for_key("standard-source-market-2026-01-01-incomplete");
+        let incomplete = layout.temp_path_for_key("standard-source-market-2026-01-01-incomplete");
 
         tokio::fs::create_dir_all(present.parent().expect("present parent"))
             .await
