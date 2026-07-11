@@ -126,7 +126,6 @@ export interface SyncPlan {
   requestedRange: TimeWindow
   effectiveRange: TimeWindow
   root: string
-  totalRemoteBytes: number
   snapshots: SnapshotPlan[]
 }
 

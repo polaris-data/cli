@@ -13,9 +13,6 @@ importers:
       '@polaris/core':
         specifier: workspace:*
         version: link:../core
-      '@termuijs/quick':
-        specifier: ^0.1.7
-        version: 0.1.7
       ink:
         specifier: ^7.1.0
         version: 7.1.0(@types/react@19.2.17)(react@19.2.7)
@@ -69,6 +66,9 @@ importers:
       keytar:
         specifier: ^7.9.0
         version: 7.9.0
+      polaris-data:
+        specifier: 0.3.1
+        version: 0.3.1
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -256,45 +256,6 @@ packages:
     resolution: {integrity: sha512-WmaxVSfvY5K/TwcG2B2TU1WOe1As1uc2s7myswtP6dBlcjU3hM08SApxv/jmyGaCE8t4gO5BBhmHY4pDUfmr2g==}
     engines: {node: '>=22'}
 
-  '@standard-schema/spec@1.1.0':
-    resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
-
-  '@termuijs/core@0.1.7':
-    resolution: {integrity: sha512-gVFlizo4+gyvC1DY/RhREkNW157R4tvL4Z2S5I+JGuCbLFfdf07q6hGp3KpbMHO48s6Nny+6hS2QKVQb3QJP/g==}
-    engines: {bun: '>=1.3.0', node: '>=18.0.0'}
-
-  '@termuijs/data@0.1.7':
-    resolution: {integrity: sha512-Ci6rnvkdG9UxyCVCRq5qXFWePVZBpUCx8Z+LDEvAEmY6otusSk12iYE87ETZ8iqRLDTwPg2usn/Rjn0GvVV7/g==}
-    engines: {bun: '>=1.3.0', node: '>=18.0.0'}
-
-  '@termuijs/jsx@0.1.7':
-    resolution: {integrity: sha512-oTL1AQGZwUM8k12sV8PT2DAuuolFqTaJ3A+wgltdrtRR0kreODq0EDjHQ6iZWb4BQV3/5VyBHHykK/9yGkMr4w==}
-    engines: {bun: '>=1.3.0', node: '>=18.0.0'}
-
-  '@termuijs/motion@0.1.7':
-    resolution: {integrity: sha512-j+gCcBYNFYw3RmC2zETXRT2AyJf5TxHV6hf0QQv3H2nvyZAxEyduhDcPlVwFzlhfRvSdXdPI9JtMLaHbLyRnFg==}
-    engines: {bun: '>=1.3.0', node: '>=18.0.0'}
-
-  '@termuijs/quick@0.1.7':
-    resolution: {integrity: sha512-iLydSW6XdIRRlzjfMLofCDoqW7poGpFnJrc3n8z1b82zvJNJqc4K5dBFEqKPPK/uZZddL0dR3Rp4YbKIqud0OQ==}
-    engines: {bun: '>=1.3.0', node: '>=18.0.0'}
-
-  '@termuijs/store@0.1.7':
-    resolution: {integrity: sha512-jqF7+fOILVK4HvVULDqLRJW2QnuiZBm5QKI5QXtGc4TZzt/dj1NOdbX7ENhh05VLOZgi4uDw1GAlkmL5VX9SNg==}
-    engines: {bun: '>=1.3.0', node: '>=18.0.0'}
-
-  '@termuijs/tss@0.1.7':
-    resolution: {integrity: sha512-9xs1kQti0XtCOLT878BEluiwO0fEkzO3ls6Q3Nz/6PV1ijxjaUIEHBnd4+ORekMTxLhUMMofQ3hv5t9t7/UBag==}
-    engines: {bun: '>=1.3.0', node: '>=18.0.0'}
-
-  '@termuijs/ui@0.1.7':
-    resolution: {integrity: sha512-2SknlX8hCvauxBcdZXQvF0m1/cgqhiDfR3jw28J8EKO4a786wveMLV1IqUTIhZ8BJzaXTBS67V9s8TflPDLwoA==}
-    engines: {bun: '>=1.3.0', node: '>=18.0.0'}
-
-  '@termuijs/widgets@0.1.7':
-    resolution: {integrity: sha512-Duo/hEzkWXa5yTuIlK6cBxgPyni1UoaqAXkMwIsJS0Mut3AqoJ/E0us9Ca1P+RphDfFLRcuqQebbS0LPdfFM+w==}
-    engines: {bun: '>=1.3.0', node: '>=18.0.0'}
-
   '@toon-format/toon@2.3.0':
     resolution: {integrity: sha512-/Ew9etdRQKVMnm9fDaCG0JjyAOK/O7T0M97oum1aW4W+UR8ZhVVPBanIV7oWgHBiGlnVxV9M55PWQCHofDV07w==}
 
@@ -402,6 +363,9 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  fzstd@0.1.1:
+    resolution: {integrity: sha512-dkuVSOKKwh3eas5VkJy1AW1vFpet8TA/fGmVA5krThl8YcOVE/8ZIoEA1+U1vEn5ckxxhLirSdY837azmbaNHA==}
+
   get-east-asian-width@1.6.0:
     resolution: {integrity: sha512-QRbvDIbx6YklUe6RxeTeleMR0yv3cYH6PsPZHcnVn7xv7zO1BHN8r0XETu8n6Ye3Q+ahtSarc3WgtNWmehIBfA==}
     engines: {node: '>=18'}
@@ -411,9 +375,6 @@ packages:
 
   ieee754@1.2.1:
     resolution: {integrity: sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA==}
-
-  immer@11.1.11:
-    resolution: {integrity: sha512-qzXuyXAkPySAGYkfsAwodDPWT8Zm7/Uo5BNt4BjhMhG5WlWyZZ4wQqnWwdS8kjlQ1Cwu6gjw3A6+0gTQwlyYtw==}
 
   incur@0.4.13:
     resolution: {integrity: sha512-BeKlYFLIsRCgC8IxsUd3S2/4kPeZaNf1Rbz+Kz41jQII4jOgr7j5w4KYe00aAEQa3V0Ur57BVxE5JDTx8L2s5Q==}
@@ -496,6 +457,10 @@ packages:
   patch-console@2.0.0:
     resolution: {integrity: sha512-0YNdUceMdaQwoKce1gatDScmMo5pu/tfABfnzEqeG0gtTmd7mh/WcwgUjtAeOU7N8nFFlbQBnFK2gXW5fGvmMA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
+  polaris-data@0.3.1:
+    resolution: {integrity: sha512-DfBz9Sx2HPy3FUQfUodGBcnzrVeTHXOKzSzkHsEcbrvZjJthYsBRcXo2IKMA7RKbkEIPha2XJs4Hu94HClQoWQ==}
+    engines: {node: '>=18.0.0'}
 
   prebuild-install@7.1.3:
     resolution: {integrity: sha512-8Mf2cbV7x1cXPUILADGI3wuhfqWvtiLA1iclTDbFRZkgRQS0NqsPZphna9V+HyTEadheuPmjaJMsbzKQFOzLug==}
@@ -746,58 +711,6 @@ snapshots:
 
   '@scalar/openapi-types@0.8.0': {}
 
-  '@standard-schema/spec@1.1.0': {}
-
-  '@termuijs/core@0.1.7': {}
-
-  '@termuijs/data@0.1.7':
-    dependencies:
-      '@termuijs/jsx': 0.1.7
-
-  '@termuijs/jsx@0.1.7':
-    dependencies:
-      '@termuijs/core': 0.1.7
-      '@termuijs/motion': 0.1.7
-      '@termuijs/widgets': 0.1.7
-
-  '@termuijs/motion@0.1.7':
-    dependencies:
-      '@termuijs/core': 0.1.7
-
-  '@termuijs/quick@0.1.7':
-    dependencies:
-      '@termuijs/core': 0.1.7
-      '@termuijs/data': 0.1.7
-      '@termuijs/jsx': 0.1.7
-      '@termuijs/store': 0.1.7
-      '@termuijs/tss': 0.1.7
-      '@termuijs/ui': 0.1.7
-      '@termuijs/widgets': 0.1.7
-
-  '@termuijs/store@0.1.7':
-    dependencies:
-      '@termuijs/jsx': 0.1.7
-      immer: 11.1.11
-
-  '@termuijs/tss@0.1.7':
-    dependencies:
-      '@termuijs/core': 0.1.7
-      '@termuijs/jsx': 0.1.7
-      '@termuijs/widgets': 0.1.7
-
-  '@termuijs/ui@0.1.7':
-    dependencies:
-      '@standard-schema/spec': 1.1.0
-      '@termuijs/core': 0.1.7
-      '@termuijs/jsx': 0.1.7
-      '@termuijs/tss': 0.1.7
-      '@termuijs/widgets': 0.1.7
-
-  '@termuijs/widgets@0.1.7':
-    dependencies:
-      '@termuijs/core': 0.1.7
-      '@termuijs/motion': 0.1.7
-
   '@toon-format/toon@2.3.0': {}
 
   '@types/node@22.20.1':
@@ -908,13 +821,13 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
+  fzstd@0.1.1: {}
+
   get-east-asian-width@1.6.0: {}
 
   github-from-package@0.0.0: {}
 
   ieee754@1.2.1: {}
-
-  immer@11.1.11: {}
 
   incur@0.4.13:
     dependencies:
@@ -1009,6 +922,10 @@ snapshots:
       mimic-fn: 2.1.0
 
   patch-console@2.0.0: {}
+
+  polaris-data@0.3.1:
+    dependencies:
+      fzstd: 0.1.1
 
   prebuild-install@7.1.3:
     dependencies:

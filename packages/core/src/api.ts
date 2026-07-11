@@ -1,91 +1,26 @@
+import {
+  PolarisClient as SdkPolarisClient,
+  PolarisError as SdkPolarisError,
+} from 'polaris-data'
+
 import { invalidArgument, otherError, requestError } from './errors.js'
-import { toRfc3339 } from './time.js'
 import type {
   AccountResponse,
-  CatalogMarket,
   CatalogResponse,
   CliAuthPollResponse,
   CliAuthStartResponse,
+  DatasetAccessStatus,
   FeedbackResponse,
   SnapshotEntry,
 } from './types.js'
-
-interface StandardSnapshotsPageWire {
-  total?: number
-  total_bytes?: number
-  next_cursor?: string | null
-  data?: SnapshotEntryWire[]
-  snapshots?: SnapshotEntryWire[]
-}
-
-interface SnapshotEntryWire {
-  key?: string
-  path?: string
-  name?: string
-  date?: string
-}
 
 interface DownloadResponse {
   url: string
 }
 
-interface BatchDownloadManifestWire {
-  source: string
-  market: string
-  date: string
-  total: number
-  total_bytes?: number
-  snapshots: BatchDownloadSnapshotWire[]
-}
-
-interface BatchDownloadSnapshotWire {
-  date: string
-  timestamp: string
-  key: string
-  url: string
-  expires_in_seconds?: number
-}
-
-interface CatalogResponseWire {
-  markets?: CatalogMarketWire[]
-  sources?: LegacyCatalogSourceWire[]
-  updatedAt?: string
-}
-
-interface CatalogMarketWire {
-  source: string
-  market: string
-  start: string
-  end: string
-  source_type?: string
-  category?: string
-  categories?: string[]
-  access?: {
-    status: 'open' | 'preview' | 'restricted'
-    public_cutoff_date?: string
-  }
-}
-
-interface LegacyCatalogSourceWire {
-  id: string
-  markets?: LegacyCatalogMarketWire[]
-}
-
-interface LegacyCatalogMarketWire {
-  id: string
-  start: string
-  end: string
-  source?: string
-  category?: string
-  categories?: string[]
-  access?: {
-    status: 'open' | 'preview' | 'restricted'
-    public_cutoff_date?: string
-  }
-}
-
 export class PolarisClient {
   readonly baseUrl: string
+  private readonly sdk: SdkPolarisClient
 
   constructor(
     baseUrl: string,
@@ -95,6 +30,13 @@ export class PolarisClient {
     readonly downloadFetch: typeof fetch = fetch,
   ) {
     this.baseUrl = baseUrl.trim().replace(/\/+$/, '')
+    const options: ConstructorParameters<typeof SdkPolarisClient>[0] = {
+      baseUrl: this.baseUrl,
+      timeout: timeoutMs,
+      fetch: apiFetch,
+    }
+    if (apiKey) options.apiKey = apiKey
+    this.sdk = new SdkPolarisClient(options)
   }
 
   hasApiKey(): boolean {
@@ -159,12 +101,31 @@ export class PolarisClient {
       throw invalidArgument('--market on remote list requires --source')
     }
 
-    const url = new URL(`${this.baseUrl}/catalog`)
-    if (source) url.searchParams.set('source', source)
-    if (market) url.searchParams.set('market', market)
-
-    const raw = await this.sendJson<CatalogResponseWire>(url, {}, 'catalog request failed')
-    return normalizeCatalog(raw)
+    try {
+      const catalogOptions: { source?: string; market?: string } = {}
+      if (source) catalogOptions.source = source
+      if (market) catalogOptions.market = market
+      const catalog = await this.sdk.catalog(catalogOptions)
+      return {
+        markets: catalog.markets.map((entry) => ({
+          source: entry.source,
+          market: entry.market,
+          start: entry.start ?? '',
+          end: entry.end ?? '',
+          catalog_source: entry.source_type,
+          categories: entry.categories ?? [],
+          access: entry.access
+            ? {
+                status: entry.access.status as DatasetAccessStatus,
+                public_cutoff_date: entry.access.public_cutoff_date ?? undefined,
+              }
+            : undefined,
+        })),
+        updated_at: catalog.updatedAt,
+      }
+    } catch (error) {
+      throw mapSdkError(error, 'catalog request failed')
+    }
   }
 
   async listSnapshots(
@@ -173,41 +134,20 @@ export class PolarisClient {
     from: Date,
     to: Date,
   ): Promise<{ snapshots: SnapshotEntry[]; totalRemoteBytes: number }> {
-    let cursor: string | undefined
-    const all: SnapshotEntry[] = []
-    let totalRemoteBytes = 0
-
-    while (true) {
-      const url = new URL(`${this.baseUrl}/snapshots`)
-      url.searchParams.set('source', source)
-      url.searchParams.set('market', market)
-      url.searchParams.set('from', toRfc3339(from))
-      url.searchParams.set('to', toRfc3339(to))
-      url.searchParams.set('limit', '1000')
-      if (cursor) url.searchParams.set('cursor', cursor)
-
-      const page = await this.sendJson<StandardSnapshotsPageWire>(
-        url,
-        {},
-        'snapshot listing failed',
-      )
-      const snapshotEntries = [...(page.snapshots ?? []), ...(page.data ?? [])]
-      const normalized = snapshotEntries.map(intoSnapshot)
-      if (all.length === 0) totalRemoteBytes = page.total_bytes ?? 0
-      all.push(...normalized)
-
-      cursor = page.next_cursor ?? undefined
-      if (!cursor) {
-        if (page.total && page.total !== all.length && page.total !== 0) {
-          throw otherError(
-            `snapshot pagination returned ${all.length} entries but advertised ${page.total}`,
-          )
-        }
-        break
+    try {
+      const entries = await this.sdk.listSnapshots({
+        source,
+        market,
+        from,
+        to,
+      })
+      return {
+        snapshots: entries.map((entry) => ({ key: entry.key, date: entry.date })),
+        totalRemoteBytes: 0,
       }
+    } catch (error) {
+      throw mapSdkError(error, 'snapshot listing failed')
     }
-
-    return { snapshots: all, totalRemoteBytes }
   }
 
   async downloadBatchManifest(
@@ -228,58 +168,37 @@ export class PolarisClient {
       expiresInSeconds?: number
     }>
   }> {
-    const url = new URL(`${this.baseUrl}/download`)
-    url.searchParams.set('source', source)
-    url.searchParams.set('market', market)
-    url.searchParams.set('date', date)
-    url.searchParams.set('mode', 'json')
-
-    const manifest = await this.sendJson<BatchDownloadManifestWire>(
-      url,
-      {},
-      `download manifest request failed for ${source}/${market}/${date}`,
-    )
-
-    return {
-      source: manifest.source,
-      market: manifest.market,
-      date: manifest.date,
-      total: manifest.total,
-      totalBytes: manifest.total_bytes ?? 0,
-      snapshots: manifest.snapshots.map((snapshot) =>
-        snapshot.expires_in_seconds === undefined
-          ? {
-              date: snapshot.date,
-              timestamp: snapshot.timestamp,
-              key: snapshot.key,
-              url: snapshot.url,
-            }
-          : {
-              date: snapshot.date,
-              timestamp: snapshot.timestamp,
-              key: snapshot.key,
-              url: snapshot.url,
-              expiresInSeconds: snapshot.expires_in_seconds,
-            },
-      ),
+    try {
+      const manifest = await this.sdk.getSnapshotDownloadUrls({ source, market, date })
+      return {
+        source: manifest.source,
+        market: manifest.market,
+        date: manifest.date,
+        total: manifest.total,
+        totalBytes: manifest.total_bytes ?? 0,
+        snapshots: manifest.snapshots.map((snapshot) => ({
+          date: snapshot.date,
+          timestamp: snapshot.timestamp,
+          key: snapshot.key,
+          url: snapshot.url,
+          expiresInSeconds: snapshot.expires_in_seconds,
+        })),
+      }
+    } catch (error) {
+      throw mapSdkError(
+        error,
+        `download manifest request failed for ${source}/${market}/${date}`,
+      )
     }
   }
 
   async downloadSnapshot(key: string): Promise<Response> {
-    const url = new URL(`${this.baseUrl}/download`)
-    url.searchParams.set('key', key)
-    url.searchParams.set('mode', 'json')
-    const response = await this.authorizedFetch(url, {}, this.apiFetch, `download request failed for ${key}`)
-    const body = await response.text()
-    if (!response.ok) throw httpError(response.status, body, 'download request failed')
-
     let download: DownloadResponse
     try {
-      download = JSON.parse(body) as DownloadResponse
+      download = await this.sdk.getSnapshotDownloadUrl({ key, mode: 'json' })
     } catch (error) {
-      throw otherError(`failed to parse download response: ${bodySnippet(body)}`, error)
+      throw mapSdkError(error, 'download request failed')
     }
-
     return this.downloadFromUrl(download.url, key)
   }
 
@@ -348,53 +267,12 @@ export function httpError(status: number, body: string, context: string) {
   return requestError(status, message, status === 429 || status >= 500)
 }
 
-function intoSnapshot(wire: SnapshotEntryWire): SnapshotEntry {
-  const key = wire.key ?? wire.path ?? wire.name
-  if (!key) throw otherError('snapshot listing failed: missing snapshot key')
-  return wire.date ? { key, date: wire.date } : { key }
-}
-
-function normalizeCatalog(raw: CatalogResponseWire): CatalogResponse {
-  const directMarkets = raw.markets ?? []
-  const markets =
-    directMarkets.length > 0
-      ? directMarkets.map(normalizeCatalogMarket)
-      : (raw.sources ?? []).flatMap((source) =>
-          (source.markets ?? []).map((market) =>
-            compactOptional({
-              source: source.id,
-              market: market.id,
-              start: market.start,
-              end: market.end,
-              catalog_source: market.source,
-              categories: normalizeCategories(market.category, market.categories),
-              access: market.access,
-            }),
-          ),
-        )
-  return { markets, updated_at: raw.updatedAt }
-}
-
-function normalizeCatalogMarket(wire: CatalogMarketWire): CatalogMarket {
-  return compactOptional({
-    source: wire.source,
-    market: wire.market,
-    start: wire.start,
-    end: wire.end,
-    catalog_source: wire.source_type,
-    categories: normalizeCategories(wire.category, wire.categories),
-    access: wire.access,
-  })
-}
-
-function normalizeCategories(category?: string, categories?: string[]): string[] {
-  if (categories?.length) return categories
-  if (category) return [category]
-  return []
-}
-
-function compactOptional<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined),
-  ) as T
+function mapSdkError(error: unknown, context: string) {
+  if (error instanceof SdkPolarisError) {
+    const status = error.statusCode
+    const retryable = status === 429 || (status !== undefined && status >= 500)
+    return requestError(status, `${context}: ${error.message}`, retryable)
+  }
+  if (error instanceof Error) return otherError(context, error)
+  return otherError(context, new Error(String(error)))
 }

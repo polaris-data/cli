@@ -67,11 +67,17 @@ export function parseOpaqueKey(key: string): [string, string, string, string] {
 
   const date = trimmed.slice(dateStart, dateStart + 10)
   const prefix = trimmed.slice(0, dateStart - 1)
-  const parts = prefix.split('-', 3)
-  if (parts.length !== 3 || parts.some((part) => !part)) {
+  const firstDash = prefix.indexOf('-')
+  const secondDash = firstDash === -1 ? -1 : prefix.indexOf('-', firstDash + 1)
+  if (firstDash <= 0 || secondDash <= firstDash + 1 || secondDash >= prefix.length - 1) {
     throw invalidArgument(`invalid opaque key prefix: ${key}`)
   }
-  return [parts[0]!, parts[1]!, parts[2]!, date]
+  return [
+    prefix.slice(0, firstDash),
+    prefix.slice(firstDash + 1, secondDash),
+    prefix.slice(secondDash + 1),
+    date,
+  ]
 }
 
 export function findDatePattern(text: string): number | undefined {

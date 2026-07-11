@@ -48,6 +48,14 @@ test('layout maps opaque keys to canonical paths', async () => {
   )
 })
 
+test('layout preserves dashes inside market names', async () => {
+  const layout = new Layout('/tmp/polaris')
+  assert.equal(
+    layout.dataPathForKey('standard-arcus-AAPL-USD-2026-07-11-00'),
+    '/tmp/polaris/data/standard/arcus/AAPL-USD/2026-07-11/standard-arcus-AAPL-USD-2026-07-11-00.jsonl.zst',
+  )
+})
+
 test('sync lock can be reacquired after release', async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'polaris-lock-'))
   const layout = new Layout(temp)
@@ -76,7 +84,6 @@ test('catalog and snapshot pagination drive the sync plan', async () => {
       to: fixture.coverage.end,
     })
     assert.equal(plan.snapshots.length, 2)
-    assert.equal(plan.totalRemoteBytes, fixture.totalBytes)
 
     const execution = await executeSync(client, plan, 2)
     assert.equal(execution.downloadedKeys.length, 2)

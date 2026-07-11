@@ -53,6 +53,7 @@ export class MockPolarisServer {
 
     if (method === 'GET' && url.pathname === '/catalog') {
       return this.json(res, {
+        updatedAt: '2026-07-11T00:00:00Z',
         markets:
           this.fixture.marketAvailable === false
             ? []
@@ -73,10 +74,12 @@ export class MockPolarisServer {
     if (method === 'GET' && url.pathname === '/snapshots') {
       const cursor = Number.parseInt(url.searchParams.get('cursor') ?? '0', 10) || 0
       const page = this.fixture.pages[cursor] ?? []
+      const hasMore = cursor + 1 < this.fixture.pages.length
       return this.json(res, {
         total: this.fixture.pages.flat().length,
         total_bytes: this.fixture.totalBytes,
-        next_cursor: cursor + 1 < this.fixture.pages.length ? String(cursor + 1) : null,
+        next_cursor: hasMore ? String(cursor + 1) : null,
+        has_more: hasMore,
         snapshots: page,
       })
     }

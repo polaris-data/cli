@@ -52,7 +52,6 @@ export async function buildSyncPlan(
     requestedRange,
     effectiveRange,
     root: config.root,
-    totalRemoteBytes: remote.totalRemoteBytes,
     snapshots,
   }
 }
