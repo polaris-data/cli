@@ -376,7 +376,24 @@ cli.command('update', {
   },
 })
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export async function isDirectCliExecution(
+  moduleUrl: string,
+  entryArg: string | undefined,
+): Promise<boolean> {
+  if (!entryArg) return false
+
+  try {
+    const [modulePath, entryPath] = await Promise.all([
+      fs.realpath(fileURLToPath(moduleUrl)),
+      fs.realpath(entryArg),
+    ])
+    return modulePath === entryPath
+  } catch {
+    return path.resolve(fileURLToPath(moduleUrl)) === path.resolve(entryArg)
+  }
+}
+
+if (await isDirectCliExecution(import.meta.url, process.argv[1])) {
   await cli.serve(process.argv.slice(2))
 }
 
