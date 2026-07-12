@@ -3,8 +3,9 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 
-import { cli } from './index.js'
+import { cli, isDirectCliExecution } from './index.js'
 import { basicFixture, MockPolarisServer } from '../../core/test/support/mock-server.js'
 
 async function serve(argv: string[]) {
@@ -125,4 +126,19 @@ test('reset --json removes local roots', async () => {
   const parsed = JSON.parse(result.output)
   assert.equal(parsed.command, 'reset')
   assert.ok(Array.isArray(parsed.removed_roots))
+})
+
+test('direct execution detection resolves symlinked entry paths', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'polaris-cli-entry-'))
+  const realTemp = await fs.realpath(temp)
+  const modulePath = path.join(realTemp, 'entry.js')
+  const aliasPath = path.join(temp, 'entry.js')
+
+  await fs.writeFile(modulePath, '')
+
+  assert.equal(await isDirectCliExecution(pathToFileURL(modulePath).href, aliasPath), true)
+  assert.equal(
+    await isDirectCliExecution(pathToFileURL(modulePath).href, path.join(realTemp, 'other.js')),
+    false,
+  )
 })
