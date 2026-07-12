@@ -17,7 +17,7 @@
 - Inspect the local dataset tree managed by Polaris
 - Automate data workflows with plain CLI output or `--json`
 
-![Polaris product screenshot](assets/polaris-product-screen.png)
+![Polaris product screenshot](assets/polaris-product.png)
 
 ## Quickstart
 
