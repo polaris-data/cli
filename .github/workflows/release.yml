@@ -240,7 +240,9 @@ jobs:
           cp install.sh "${package_root}/polaris/install.sh"
           cp "$(command -v node)" "${package_root}/polaris/${{ matrix.node_name }}"
           chmod 0755 "${package_root}/polaris/install.sh" "${package_root}/polaris/${{ matrix.node_name }}"
-          cp -R deployed/cli/. "${package_root}/polaris/app/"
+          # `pnpm deploy` produces a symlink-heavy tree that BSD `cp -R`
+          # can stage incorrectly on macOS runners.
+          tar -C deployed/cli -cf - . | tar -C "${package_root}/polaris/app" -xf -
 
           cat >"${package_root}/polaris/polaris" <<'EOF'
           #!/usr/bin/env bash
