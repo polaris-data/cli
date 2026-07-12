@@ -5,21 +5,18 @@ on:
     branches:
       - main
     tags:
-      - "v*.*.*"
+      - 'v*.*.*'
     paths:
-      - Cargo.toml
+      - 'packages/cli/src/index.ts'
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build and publish, for example v0.1.0
+        description: Release tag to build and publish, for example v0.7.0
         required: true
         type: string
 
 permissions:
   contents: write
-
-env:
-  CARGO_TERM_COLOR: always
 
 jobs:
   prepare:
@@ -51,6 +48,10 @@ jobs:
           source_ref="${GITHUB_SHA}"
           tag=""
 
+          read_cli_version() {
+            sed -n "s/^const version = '\(.*\)'$/\1/p" packages/cli/src/index.ts | head -n1
+          }
+
           if [[ "${event_name}" == "workflow_dispatch" ]]; then
             tag="${{ inputs.tag }}"
             should_release="true"
@@ -59,18 +60,18 @@ jobs:
             should_release="true"
             source_ref="${tag}"
           else
-            current_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+            current_version="$(read_cli_version)"
             previous_version=""
 
             if [[ -z "${current_version}" ]]; then
-              echo "Could not determine crate version from Cargo.toml." >&2
+              echo "Could not determine CLI version from packages/cli/src/index.ts." >&2
               exit 1
             fi
 
             if [[ -n "${before_sha}" && "${before_sha}" != "0000000000000000000000000000000000000000" ]]; then
               previous_version="$(
-                git show "${before_sha}:Cargo.toml" 2>/dev/null \
-                  | sed -n 's/^version = "\(.*\)"/\1/p' \
+                git show "${before_sha}:packages/cli/src/index.ts" 2>/dev/null \
+                  | sed -n "s/^const version = '\(.*\)'$/\1/p" \
                   | head -n1 || true
               )"
             fi
@@ -126,32 +127,48 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
-      - name: Validate Cargo version matches tag
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+          run_install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm check:ts
+
+      - name: Run test suite
+        run: pnpm test:ts
+
+      - name: Build workspace
+        run: pnpm build:ts
+
+      - name: Validate CLI version matches tag
         id: meta
         shell: bash
         run: |
           set -euo pipefail
 
-          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          version="$(node packages/cli/dist/cli/src/index.js --version)"
           tag="${{ needs.prepare.outputs.tag }}"
 
           if [[ -z "${version}" ]]; then
-            echo "Could not determine crate version from Cargo.toml." >&2
+            echo "Could not determine built CLI version." >&2
             exit 1
           fi
 
           if [[ "${tag}" != "v${version}" ]]; then
-            echo "Tag ${tag} does not match Cargo.toml version v${version}." >&2
+            echo "Tag ${tag} does not match CLI version v${version}." >&2
             exit 1
           fi
 
           echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
           echo "version=${version}" >>"${GITHUB_OUTPUT}"
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Run test suite
-        run: cargo test
 
   build:
     needs:
@@ -164,50 +181,85 @@ jobs:
         include:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+            node_name: node
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            archive_ext: tar.gz
+            node_name: node
           - runner: macos-15-intel
             target: x86_64-apple-darwin
+            archive_ext: tar.gz
+            node_name: node
           - runner: macos-14
             target: aarch64-apple-darwin
+            archive_ext: tar.gz
+            node_name: node
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
         with:
-          targets: ${{ matrix.target }}
+          node-version: 22
 
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+          run_install: false
 
-      - name: Package archive
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: pnpm build:ts
+
+      - name: Create portable app package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf deployed
+          pnpm --filter @polaris/cli --prod deploy deployed/cli
+
+      - name: Package runtime bundle
         shell: bash
         run: |
           set -euo pipefail
 
           tag="${{ needs.validate.outputs.tag }}"
           target="${{ matrix.target }}"
-          archive_name="polaris-${tag}-${target}.tar.gz"
-          build_dir="target/${target}/release"
-          package_dir="$(mktemp -d)"
-          verify_dir="$(mktemp -d)"
-          trap 'rm -rf "${package_dir}" "${verify_dir}"' EXIT
+          archive_name="polaris-${tag}-${target}.${{ matrix.archive_ext }}"
+          package_root="$(mktemp -d)"
+          verify_root="$(mktemp -d)"
+          trap 'rm -rf "${package_root}" "${verify_root}"' EXIT
+
+          mkdir -p "${package_root}/polaris/app"
+          cp install.sh "${package_root}/polaris/install.sh"
+          cp "$(command -v node)" "${package_root}/polaris/${{ matrix.node_name }}"
+          chmod 0755 "${package_root}/polaris/install.sh" "${package_root}/polaris/${{ matrix.node_name }}"
+          cp -R deployed/cli/. "${package_root}/polaris/app/"
+
+          cat >"${package_root}/polaris/polaris" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          exec "${SELF_DIR}/node" "${SELF_DIR}/app/dist/cli/src/index.js" "$@"
+          EOF
+          chmod 0755 "${package_root}/polaris/polaris"
 
           mkdir -p dist
-          cp "${build_dir}/polaris" "${package_dir}/polaris"
-          chmod 0755 "${package_dir}/polaris"
-          tar -czf "dist/${archive_name}" -C "${package_dir}" polaris
+          tar -czf "dist/${archive_name}" -C "${package_root}" polaris
 
-          tar -xzf "dist/${archive_name}" -C "${verify_dir}"
-          "${verify_dir}/polaris" --version
+          tar -xzf "dist/${archive_name}" -C "${verify_root}"
+          "${verify_root}/polaris/polaris" --version | grep -Fx "${{ needs.validate.outputs.version }}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
-          path: dist/polaris-${{ needs.validate.outputs.tag }}-${{ matrix.target }}.tar.gz
+          path: dist/polaris-${{ needs.validate.outputs.tag }}-${{ matrix.target }}.${{ matrix.archive_ext }}
           if-no-files-found: error
 
   publish:
@@ -254,7 +306,7 @@ jobs:
           set -euo pipefail
 
           cd dist
-          sha256sum polaris-${{ needs.validate.outputs.tag }}-*.tar.gz > polaris-${{ needs.validate.outputs.tag }}-checksums.txt
+          shasum -a 256 polaris-${{ needs.validate.outputs.tag }}-*.tar.gz > polaris-${{ needs.validate.outputs.tag }}-checksums.txt
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2

@@ -1,0 +1,14 @@
+{
+  "name": "polaris-monorepo",
+  "private": true,
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build:ts": "pnpm -r build",
+    "test:ts": "pnpm -r test",
+    "check:ts": "pnpm -r typecheck",
+    "dev:cli": "pnpm --filter @polaris/cli dev"
+  }
+}
