@@ -1,6 +1,4 @@
 import fs from 'node:fs'
-import path from 'node:path'
-
 import { invalidArgument, otherError } from './errors.js'
 import { dataLocalDir } from './platform.js'
 import type { ApiKeySource, Config } from './types.js'
@@ -71,19 +69,6 @@ export function selectDefaultRoot(primaryRoot: string, legacyRoot: string): stri
     return primaryRoot
   }
   return legacyRoot
-}
-
-export function looksLikeCargoTargetDir(candidate: string): boolean {
-  const parts = path.normalize(candidate).split(path.sep)
-  let sawTarget = false
-  for (const part of parts) {
-    if (part === 'target') {
-      sawTarget = true
-      continue
-    }
-    if (sawTarget && (part === 'debug' || part === 'release')) return true
-  }
-  return false
 }
 
 function preferredEnv(

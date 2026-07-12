@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink'
+import { existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import Image, { InkPictureProvider } from 'ink-picture'
 
 import {
   KeychainCredentialStore,
@@ -50,6 +53,9 @@ interface LoadedMarketDates {
   dateGroups: DateGroup[]
 }
 
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
+const POLARIS_ICON_PATH = resolvePolarisIconPath()
+const POLARIS_SITE_URL = 'https://polaris.supply'
 const POLARIS_ICON_ASCII = [
   '   ███████',
   '▄▄▄███████',
@@ -69,14 +75,16 @@ export async function runPolarisBrowser(
   const markets = await loadDatasets(client, seed)
 
   const { waitUntilExit } = render(
-    <PolarisBrowser
-      client={client}
-      config={config}
-      layout={layout}
-      seed={seed}
-      initialAccount={account}
-      initialMarkets={markets}
-    />,
+    <InkPictureProvider>
+      <PolarisBrowser
+        client={client}
+        config={config}
+        layout={layout}
+        seed={seed}
+        initialAccount={account}
+        initialMarkets={markets}
+      />
+    </InkPictureProvider>,
   )
 
   await waitUntilExit()
@@ -432,6 +440,11 @@ function PolarisBrowser({
 
   const marketFocusWidths = allocateColumnWidths(columns, [0.5, 0.3, 0.2], [18, 20, 16], columnGap)
   const dateFocusWidths = allocateColumnWidths(columns, [0.18, 0.26, 0.50, 0.06], [12, 18, 22, 2], columnGap)
+  const marketFocusBrandWidth = marketFocusWidths[0] ?? 18
+  const marketFocusPreviewWidth = marketFocusWidths[2] ?? 16
+  const dateFocusBrandWidth = dateFocusWidths[0] ?? 12
+  const dateFocusDatesWidth = dateFocusWidths[2] ?? 22
+  const dateFocusRightWidth = dateFocusWidths[3] ?? 2
 
   const marketViewportStart = Math.min(
     Math.max(selectedMarketIndex - Math.floor(marketListHeight / 2), 0),
@@ -454,22 +467,29 @@ function PolarisBrowser({
     <Box flexDirection="column">
       {focus === 'markets' ? (
         <Box flexDirection="row">
-          <Box flexDirection="column" width={marketFocusWidths[0]} marginRight={columnGap}>
+          <Box flexDirection="column" width={marketFocusBrandWidth} flexShrink={0} marginRight={columnGap}>
             <Box flexDirection="column" marginLeft={2}>
-              {POLARIS_ICON_ASCII.map((line, index) => (
-                <Text key={index} bold wrap="truncate-end">{line}</Text>
-              ))}
+              <Text> </Text>
+              <Text> </Text>
+              <BrandLogo visibleWidth={marketFocusBrandWidth - 4} />
               <Text> </Text>
               <Text bold>Polaris - Frontier Market Data</Text>
+              <Text dimColor wrap="wrap">
+                Recording market data from Hyperliquid, Aster, Lighter, Backpack, and more.
+              </Text>
+              <Text> </Text>
               <Text> </Text>
               <Text dimColor wrap="wrap">↑↓ navigate · → enter market</Text>
               <Text dimColor wrap="wrap">← back · type to filter</Text>
               <Text dimColor wrap="wrap">Enter download · Esc quit</Text>
+              <Text> </Text>
+              <Text> </Text>
+              <Text dimColor wrap="wrap">{`Docs, SDKs, and more: ${POLARIS_SITE_URL}`}</Text>
             </Box>
           </Box>
 
-          <Box flexDirection="column" width={marketFocusWidths[1]} marginRight={columnGap}>
-            <Text dimColor={showSearchInput && !search}>{marketListHeader}</Text>
+          <Box flexDirection="column" flexGrow={1} marginRight={columnGap}>
+            <Text dimColor={showSearchInput && !search} wrap="truncate-end">{marketListHeader}</Text>
             {filteredMarkets.slice(marketViewportStart, marketViewportEnd).map((market, i) => {
               const index = marketViewportStart + i
               const isSelected = index === selectedMarketIndex
@@ -489,7 +509,7 @@ function PolarisBrowser({
             )}
           </Box>
 
-          <Box flexDirection="column" width={marketFocusWidths[2]}>
+          <Box flexDirection="column" width={marketFocusPreviewWidth} flexShrink={0}>
             {!selectedMarket ? (
               <Text dimColor>No markets match the current filter</Text>
             ) : previewLoadingDataset === selectedMarket.dataset ? (
@@ -527,14 +547,12 @@ function PolarisBrowser({
         </Box>
       ) : (
         <Box flexDirection="row">
-          <Box flexDirection="column" width={dateFocusWidths[0]} marginRight={columnGap}>
-            {POLARIS_ICON_ASCII.map((line, index) => (
-              <Text key={index} bold wrap="truncate-start">{line}</Text>
-            ))}
+          <Box flexDirection="column" width={dateFocusBrandWidth} flexShrink={0} marginRight={columnGap}>
+            <Text wrap="truncate-end">{' '}</Text>
           </Box>
 
-          <Box flexDirection="column" width={dateFocusWidths[1]} marginRight={columnGap}>
-            <Text dimColor={showSearchInput && !search}>{marketListHeader}</Text>
+          <Box flexDirection="column" flexGrow={1} marginRight={columnGap}>
+            <Text dimColor={showSearchInput && !search} wrap="truncate-end">{marketListHeader}</Text>
             {filteredMarkets.slice(marketViewportStart, marketViewportEnd).map((market, i) => {
               const index = marketViewportStart + i
               const isSelected = index === selectedMarketIndex
@@ -554,7 +572,7 @@ function PolarisBrowser({
             )}
           </Box>
 
-          <Box flexDirection="column" width={dateFocusWidths[2]} marginRight={columnGap}>
+          <Box flexDirection="column" width={dateFocusDatesWidth} flexShrink={0} marginRight={columnGap}>
             {loadingDates ? (
               <Text dimColor>Loading dates...</Text>
             ) : dateGroups.length > 0 ? (
@@ -591,12 +609,52 @@ function PolarisBrowser({
             )}
           </Box>
 
-          <Box flexDirection="column" width={dateFocusWidths[3]}>
+          <Box flexDirection="column" width={dateFocusRightWidth} flexShrink={0}>
             <Text wrap="truncate-end">{' '}</Text>
           </Box>
         </Box>
       )}
     </Box>
+  )
+}
+
+function BrandLogo({
+  visibleWidth,
+  renderWidth = visibleWidth,
+  cropFromLeft = false,
+}: {
+  visibleWidth: number
+  renderWidth?: number
+  cropFromLeft?: boolean
+}) {
+  const viewportWidth = Math.max(1, visibleWidth)
+  const cellWidth = Math.max(8, Math.min(renderWidth, 18))
+  const cellHeight = Math.max(4, Math.round(cellWidth / 2))
+
+  if (POLARIS_ICON_PATH) {
+    return (
+      <Box width={viewportWidth} justifyContent={cropFromLeft ? 'flex-end' : 'flex-start'}>
+        <Image
+          src={POLARIS_ICON_PATH}
+          width={cellWidth}
+          height={cellHeight}
+          protocol="halfBlock"
+          alt="Polaris icon"
+        />
+      </Box>
+    )
+  }
+
+  const fallbackWidth = Math.max(1, Math.min(viewportWidth, cellWidth))
+
+  return (
+    <>
+      {POLARIS_ICON_ASCII.map((line, index) => (
+        <Text key={index} bold wrap="truncate-end">
+          {cropFromLeft ? line.slice(-fallbackWidth) : line.slice(0, fallbackWidth)}
+        </Text>
+      ))}
+    </>
   )
 }
 
@@ -664,6 +722,19 @@ function renderCompletionBar(present: number, total: number, barWidth: number): 
 
 function formatCompletionCount(present: number, total: number): string {
   return `${String(present).padStart(3, ' ')}/${String(total).padStart(3, ' ')}`
+}
+
+function resolvePolarisIconPath(): string | null {
+  const candidates = [
+    path.resolve(MODULE_DIR, '../assets/polaris-icon.png'),
+    path.resolve(MODULE_DIR, '../../../assets/polaris-icon.png'),
+  ]
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+
+  return null
 }
 
 function allocateColumnWidths(

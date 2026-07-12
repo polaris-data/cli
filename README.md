@@ -27,11 +27,11 @@
 curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash
 ```
 
-Or with Homebrew:
+The installer builds the TypeScript CLI locally from the current `main` branch, so it requires Node.js 22+.
+To install a specific tagged version instead, run:
 
 ```bash
-brew tap polaris-data/tap
-brew install polaris-data/tap/polaris
+curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --version v0.7.0
 ```
 
 ### 2. Browse via TUI
@@ -90,18 +90,28 @@ Check whether Polaris sees a configured credential:
 polaris account
 ```
 
+### 7. Build from source
+
+```bash
+pnpm install
+pnpm build:ts
+```
+
 ## CLI Overview
 
 ```text
 polaris
 ├── account
 ├── catalog
+├── completions
 ├── feedback
 ├── key
 ├── login
 ├── list
+├── mcp
 ├── download
 ├── reset
+├── skills
 └── update
 ```
 
@@ -110,6 +120,12 @@ Top-level help:
 ```bash
 polaris --help
 ```
+
+Built-in integrations:
+
+- `polaris completions` generates shell completion scripts
+- `polaris mcp` exposes MCP registration helpers such as `add` and `doctor`
+- `polaris skills` exposes skill sync helpers such as `add` and `list`
 
 ## Command Reference
 
@@ -203,14 +219,12 @@ polaris reset --json
 
 ### `polaris update`
 
-Downloads the release installer and updates the current CLI in place.
-
-By default, `polaris update` tries to preserve the current install directory when running from an installed `polaris` binary. If it is run from a legacy `tick` binary, it preserves that legacy install directory. You can override that behavior explicitly.
+Reinstalls or updates Polaris by rerunning the bundled `install.sh` from the current runtime. By default it updates to the current `main` branch; use `--version` to pin a specific tag.
 
 ```bash
 polaris update
 polaris update --version v0.7.0
-polaris update --install-dir "$HOME/.local/bin"
+polaris update --json
 ```
 
 ## Configuration
@@ -255,6 +269,7 @@ Commands with `--json` support:
 - `polaris list`
 - `polaris download`
 - `polaris reset`
+- `polaris update`
 
 Examples:
 
@@ -263,6 +278,7 @@ polaris catalog --json
 polaris list --json
 polaris download --source aster --market BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z --json
 polaris reset --json
+polaris update --json
 ```
 
 ## Data Layout
@@ -297,18 +313,8 @@ Compatibility note:
 Useful local commands:
 
 ```bash
-cargo run -- --help
-cargo test
+pnpm build:ts
+pnpm check:ts
+pnpm test:ts
+node packages/cli/dist/index.js --help
 ```
-
-## Release
-
-Polaris release assets are built by a single GitHub Actions workflow from the crate version in `Cargo.toml`.
-
-Expected assets:
-
-- `polaris-v{version}-x86_64-apple-darwin.tar.gz`
-- `polaris-v{version}-aarch64-apple-darwin.tar.gz`
-- `polaris-v{version}-x86_64-unknown-linux-gnu.tar.gz`
-- `polaris-v{version}-aarch64-unknown-linux-gnu.tar.gz`
-- `polaris-v{version}-checksums.txt`

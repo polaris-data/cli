@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "polaris-ts": "./dist/index.js"
+    "polaris": "./dist/cli/src/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

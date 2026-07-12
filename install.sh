@@ -5,20 +5,30 @@ REPO="polaris-data/cli"
 PROJECT="polaris"
 DEFAULT_INSTALL_DIR="${HOME}/.polaris/bin"
 LEGACY_INSTALL_DIR="${HOME}/.tick/bin"
+DEFAULT_BRANCH="main"
+MIN_NODE_MAJOR=22
 
 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+RUNTIME_DIR=""
 REQUESTED_VERSION=""
+SOURCE_DIR_OVERRIDE="${POLARIS_INSTALL_SOURCE_DIR:-}"
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--version <tag>] [--install-dir <path>]
+Usage: install.sh [--version <tag>] [--install-dir <path>] [--runtime-dir <path>]
 
-Install or update the latest Polaris CLI release from GitHub Releases.
+Build and install the Polaris TypeScript CLI from source.
+
+By default, installs the current main branch. Use --version to install a specific tag.
 
 Options:
-  --version <tag>      Install a specific release tag, for example: v0.1.0
-  --install-dir <dir>  Install directory for the polaris binary
+  --version <tag>      Build a specific Git tag, for example: v0.7.0
+  --install-dir <dir>  Install directory for the polaris launcher
+  --runtime-dir <dir>  Runtime directory for the built workspace
   -h, --help           Show this help text
+
+Environment:
+  POLARIS_INSTALL_SOURCE_DIR  Use a local repo checkout instead of downloading GitHub source
 EOF
 }
 
@@ -62,6 +72,11 @@ parse_args() {
         INSTALL_DIR="$2"
         shift 2
         ;;
+      --runtime-dir)
+        [[ $# -ge 2 ]] || fail "--runtime-dir requires a value"
+        RUNTIME_DIR="$2"
+        shift 2
+        ;;
       -h|--help)
         usage
         exit 0
@@ -80,124 +95,158 @@ apply_default_install_dir() {
   fi
 }
 
-detect_target() {
-  local os arch
-  os="$(uname -s)"
-  arch="$(uname -m)"
+default_runtime_dir() {
+  if [[ -n "$RUNTIME_DIR" ]]; then
+    printf '%s\n' "$RUNTIME_DIR"
+    return 0
+  fi
 
-  case "${os}:${arch}" in
-    Darwin:x86_64)
-      printf '%s\n' 'x86_64-apple-darwin'
+  case "$INSTALL_DIR" in
+    "$DEFAULT_INSTALL_DIR"|"$DEFAULT_INSTALL_DIR"/*)
+      printf '%s\n' "${HOME}/.polaris/lib/${PROJECT}"
       ;;
-    Darwin:arm64)
-      printf '%s\n' 'aarch64-apple-darwin'
-      ;;
-    Linux:x86_64)
-      printf '%s\n' 'x86_64-unknown-linux-gnu'
-      ;;
-    Linux:aarch64|Linux:arm64)
-      printf '%s\n' 'aarch64-unknown-linux-gnu'
+    "$LEGACY_INSTALL_DIR"|"$LEGACY_INSTALL_DIR"/*)
+      printf '%s\n' "${HOME}/.tick/lib/${PROJECT}"
       ;;
     *)
-      fail "unsupported platform: ${os} ${arch}"
+      mkdir -p "$(dirname "$INSTALL_DIR")"
+      printf '%s\n' "$(cd "$(dirname "$INSTALL_DIR")/.." && pwd)/lib/${PROJECT}"
       ;;
   esac
 }
 
-resolve_latest_version() {
-  local response
-  response="$(
-    curl -fsSL \
-      -H 'Accept: application/vnd.github+json' \
-      -H 'X-GitHub-Api-Version: 2022-11-28' \
-      "https://api.github.com/repos/${REPO}/releases/latest"
-  )"
+ensure_node_version() {
+  require_command node
 
-  printf '%s' "$response" \
-    | tr -d '\n' \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+  local major
+  major="$(node -p "process.versions.node.split('.')[0]")"
+  [[ "$major" =~ ^[0-9]+$ ]] || fail "could not determine Node.js version"
+
+  if (( major < MIN_NODE_MAJOR )); then
+    fail "Node.js ${MIN_NODE_MAJOR}+ is required; found $(node -v)"
+  fi
 }
 
-resolve_version() {
+resolve_ref() {
   if [[ -n "$REQUESTED_VERSION" ]]; then
     printf '%s\n' "$REQUESTED_VERSION"
     return 0
   fi
 
-  log "resolving latest release"
-  local latest
-  latest="$(resolve_latest_version)"
-
-  if [[ -z "$latest" ]]; then
-    fail "could not resolve the latest release tag from GitHub"
-  fi
-
-  printf '%s\n' "$latest"
+  printf '%s\n' "$DEFAULT_BRANCH"
 }
 
-download_release_assets() {
-  local version="$1"
-  local target="$2"
-  local work_dir="$3"
-  local archive_name checksums_name base_url
+download_source_archive() {
+  local ref="$1"
+  local archive_path="$2"
+  local archive_url
 
-  archive_name="${PROJECT}-${version}-${target}.tar.gz"
-  checksums_name="${PROJECT}-${version}-checksums.txt"
-  base_url="https://github.com/${REPO}/releases/download/${version}"
-
-  log "downloading ${archive_name}"
-  curl -fsSL "${base_url}/${archive_name}" -o "${work_dir}/${archive_name}"
-
-  log "downloading ${checksums_name}"
-  curl -fsSL "${base_url}/${checksums_name}" -o "${work_dir}/${checksums_name}"
-
-  printf '%s\n' "${work_dir}/${archive_name}"
-}
-
-verify_checksum() {
-  local archive_path="$1"
-  local checksums_path="$2"
-  local archive_name expected actual
-
-  archive_name="$(basename "$archive_path")"
-  expected="$(awk -v file="$archive_name" '$2 == file { print $1 }' "$checksums_path")"
-
-  if [[ -z "$expected" ]]; then
-    fail "checksum for ${archive_name} not found in $(basename "$checksums_path")"
-  fi
-
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "$archive_path" | awk '{ print $1 }')"
-  elif command -v shasum >/dev/null 2>&1; then
-    actual="$(shasum -a 256 "$archive_path" | awk '{ print $1 }')"
+  if [[ "$ref" == "$DEFAULT_BRANCH" ]]; then
+    archive_url="https://codeload.github.com/${REPO}/tar.gz/refs/heads/${ref}"
   else
-    log "warning: sha256sum/shasum not found; skipping checksum verification"
+    archive_url="https://codeload.github.com/${REPO}/tar.gz/refs/tags/${ref}"
+  fi
+
+  log "downloading source for ${ref}"
+  curl -fsSL "$archive_url" -o "$archive_path"
+}
+
+stage_source_tree() {
+  local ref="$1"
+  local work_dir="$2"
+  local source_dir="$3"
+
+  if [[ -n "$source_dir" ]]; then
+    [[ -d "$source_dir" ]] || fail "POLARIS_INSTALL_SOURCE_DIR does not exist: ${source_dir}"
+    local staged_dir="${work_dir}/source"
+    mkdir -p "$staged_dir"
+    tar \
+      -C "$source_dir" \
+      --exclude='.context' \
+      --exclude='.git' \
+      --exclude='node_modules' \
+      --exclude='package-lock.json' \
+      --exclude='packages/*/dist' \
+      --exclude='packages/*/node_modules' \
+      -cf - . | tar -C "$staged_dir" -xf -
+    printf '%s\n' "$staged_dir"
     return 0
   fi
 
-  if [[ "$actual" != "$expected" ]]; then
-    fail "checksum mismatch for ${archive_name}"
-  fi
-
-  log "verified checksum for ${archive_name}"
+  local archive_path="${work_dir}/${PROJECT}-${ref}.tar.gz"
+  download_source_archive "$ref" "$archive_path"
+  tar -xzf "$archive_path" -C "$work_dir"
+  find "$work_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1
 }
 
-install_binary() {
-  local archive_path="$1"
-  local work_dir="$2"
-  local extracted_dir install_tmp
+resolve_pnpm() {
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM_CMD=(pnpm)
+    return 0
+  fi
 
-  extracted_dir="${work_dir}/extracted"
-  mkdir -p "$extracted_dir"
-  tar -xzf "$archive_path" -C "$extracted_dir" "${PROJECT}"
+  if command -v corepack >/dev/null 2>&1; then
+    PNPM_CMD=(corepack pnpm)
+    return 0
+  fi
 
-  [[ -f "${extracted_dir}/${PROJECT}" ]] || fail "archive did not contain ${PROJECT}"
+  fail "pnpm not found and corepack is unavailable"
+}
+
+build_workspace() {
+  local source_dir="$1"
+  resolve_pnpm
+
+  log "installing workspace dependencies"
+  if ! (cd "$source_dir" && CI=1 "${PNPM_CMD[@]}" install --frozen-lockfile); then
+    log "frozen lockfile install failed; retrying without --frozen-lockfile"
+    (cd "$source_dir" && CI=1 "${PNPM_CMD[@]}" install --no-frozen-lockfile)
+  fi
+
+  log "building TypeScript workspace"
+  (cd "$source_dir" && "${PNPM_CMD[@]}" build:ts)
+
+  [[ -f "${source_dir}/packages/cli/dist/cli/src/index.js" ]] \
+    || fail "built CLI entrypoint not found at packages/cli/dist/cli/src/index.js"
+}
+
+install_runtime_tree() {
+  local source_dir="$1"
+  local resolved_runtime_dir="$2"
+  local runtime_parent runtime_tmp
+
+  runtime_parent="$(dirname "$resolved_runtime_dir")"
+  runtime_tmp="${resolved_runtime_dir}.tmp.$$"
+
+  mkdir -p "$runtime_parent"
+  rm -rf "$runtime_tmp"
+  mkdir -p "$runtime_tmp"
+  tar -C "$source_dir" -cf - . | tar -C "$runtime_tmp" -xf -
+
+  rm -rf "$resolved_runtime_dir"
+  mv "$runtime_tmp" "$resolved_runtime_dir"
+}
+
+install_launcher() {
+  local resolved_runtime_dir="$1"
+  local launcher_tmp launcher_path cli_entry cli_entry_escaped
+
+  cli_entry="${resolved_runtime_dir}/packages/cli/dist/cli/src/index.js"
+  [[ -f "$cli_entry" ]] || fail "installed CLI entrypoint not found: ${cli_entry}"
 
   mkdir -p "$INSTALL_DIR"
-  install_tmp="${INSTALL_DIR}/.${PROJECT}.tmp.$$"
-  cp "${extracted_dir}/${PROJECT}" "$install_tmp"
-  chmod 0755 "$install_tmp"
-  mv "$install_tmp" "${INSTALL_DIR}/${PROJECT}"
+  launcher_path="${INSTALL_DIR}/${PROJECT}"
+  launcher_tmp="${launcher_path}.tmp.$$"
+  cli_entry_escaped="$(printf '%q' "$cli_entry")"
+
+  cat >"$launcher_tmp" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec node ${cli_entry_escaped} "\$@"
+EOF
+
+  chmod 0755 "$launcher_tmp"
+  mv "$launcher_tmp" "$launcher_path"
   ln -sfn "${PROJECT}" "${INSTALL_DIR}/tick"
 }
 
@@ -257,39 +306,29 @@ ensure_path() {
 }
 
 main() {
-  local target version work_dir archive_path checksums_path installed_version
+  local ref work_dir source_dir resolved_runtime_dir version_label
 
+  parse_args "$@"
   require_command curl
   require_command tar
-  parse_args "$@"
   apply_default_install_dir
+  ensure_node_version
 
-  target="$(detect_target)"
-  version="$(resolve_version)"
+  ref="$(resolve_ref)"
+  version_label="$ref"
+  resolved_runtime_dir="$(default_runtime_dir)"
   work_dir="$(mktemp -d)"
   trap "rm -rf '$work_dir'" EXIT
 
-  archive_path="$(download_release_assets "$version" "$target" "$work_dir")"
-  checksums_path="${work_dir}/${PROJECT}-${version}-checksums.txt"
-
-  verify_checksum "$archive_path" "$checksums_path"
-  install_binary "$archive_path" "$work_dir"
+  source_dir="$(stage_source_tree "$ref" "$work_dir" "$SOURCE_DIR_OVERRIDE")"
+  build_workspace "$source_dir"
+  install_runtime_tree "$source_dir" "$resolved_runtime_dir"
+  install_launcher "$resolved_runtime_dir"
   ensure_path
 
-  installed_version="$("${INSTALL_DIR}/${PROJECT}" --version 2>/dev/null || true)"
-
-  log "installed ${PROJECT} to ${INSTALL_DIR}/${PROJECT}"
-  if [[ -n "$installed_version" ]]; then
-    printf '%s\n' "$installed_version"
-  fi
-
-  case ":${PATH:-}:" in
-    *":${INSTALL_DIR}:"*)
-      ;;
-    *)
-      log "open a new shell or source your profile to use ${PROJECT} from PATH"
-      ;;
-  esac
+  log "installed ${PROJECT} (${version_label}) to ${INSTALL_DIR}/${PROJECT}"
+  log "runtime installed at ${resolved_runtime_dir}"
+  log "run '${PROJECT} --help' to get started"
 }
 
 main "$@"

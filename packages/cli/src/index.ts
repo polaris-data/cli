@@ -1,8 +1,11 @@
+#!/usr/bin/env node
 import { Cli, z } from 'incur'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import process from 'node:process'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   KeychainCredentialStore,
@@ -11,17 +14,13 @@ import {
   acquireSyncLock,
   buildSyncPlan,
   clearBookmarks,
-  createUpdateTempDir,
-  downloadUpdateInstaller,
   executeSync,
-  inferInstallDirFromExecutable,
   invalidArgument,
   loadConfig,
   openUrl,
   parseRfc3339,
   presentTotal,
   remoteTotal,
-  runUpdateInstaller,
   type CatalogMarket,
   type Config,
   type LocalSnapshotEntry,
@@ -106,11 +105,21 @@ const resetOutputSchema = z.object({
   removed_roots: z.array(z.string()),
 })
 
+const updateOutputSchema = z.object({
+  command: z.literal('update'),
+  install_script: z.string(),
+  runtime_dir: z.string(),
+  install_dir: z.string().nullable(),
+  version: z.string().nullable(),
+  status: z.literal('updated'),
+})
+
 type RemoteDatasetEntry = z.infer<typeof remoteDatasetSchema>
 type RemoteListOutput = z.infer<typeof remoteListOutputSchema>
 type LocalListOutput = z.infer<typeof localListOutputSchema>
 type SyncOutput = z.infer<typeof syncOutputSchema>
 type ResetOutput = z.infer<typeof resetOutputSchema>
+type UpdateOutput = z.infer<typeof updateOutputSchema>
 
 export const cli = Cli.create('polaris', {
   version,
@@ -352,26 +361,15 @@ cli.command('reset', {
 })
 
 cli.command('update', {
-  description: 'Download and install the latest Polaris CLI release.',
+  description: 'Reinstall or update Polaris using the bundled installer.',
   options: z.object({
     version: z.string().optional(),
-    installDir: z.string().optional(),
   }),
-  output: z.union([
-    z.string(),
-    z.object({
-      updated: z.boolean(),
-      version: z.string().nullable(),
-      install_dir: z.string().nullable(),
-    }),
-  ]),
+  output: z.union([z.string(), updateOutputSchema]),
   async run(c) {
     try {
-      const result = await runUpdateCommand(compactOptional({
-        version: c.options.version,
-        installDir: c.options.installDir,
-      }))
-      return formatCommandResult(c.formatExplicit, result.json, result.human)
+      const output = await runUpdateCommand({ version: c.options.version ?? null })
+      return formatCommandResult(c.formatExplicit, output, renderUpdateOutput(output))
     } catch (error) {
       return handleCliError(c, error)
     }
@@ -554,6 +552,33 @@ async function runResetCommand(config: Config): Promise<ResetOutput> {
   }
 }
 
+async function runUpdateCommand(options: { version: string | null }): Promise<UpdateOutput> {
+  const runtimeDir = resolveCliRuntimeRoot()
+  const installScript = path.join(runtimeDir, 'install.sh')
+  const installDir = inferInstallDirFromRuntimeRoot(runtimeDir)
+
+  try {
+    await fs.access(installScript)
+  } catch {
+    throw invalidArgument(`installer not found at ${installScript}`)
+  }
+
+  const args = [installScript, '--runtime-dir', runtimeDir]
+  if (installDir) args.push('--install-dir', installDir)
+  if (options.version) args.push('--version', options.version)
+
+  await runInstallerScript('bash', args)
+
+  return {
+    command: 'update',
+    install_script: installScript,
+    runtime_dir: runtimeDir,
+    install_dir: installDir,
+    version: options.version,
+    status: 'updated',
+  }
+}
+
 async function runLoginCommand(config: Config): Promise<{
   human: string
   json: {
@@ -617,30 +642,6 @@ async function runLoginCommand(config: Config): Promise<{
     }
     if (poll.status === 'consumed') throw invalidArgument('login session was already consumed')
     throw invalidArgument('login session expired')
-  }
-}
-
-async function runUpdateCommand(options: {
-  version?: string | undefined
-  installDir?: string | undefined
-}): Promise<{
-  human: string
-  json: { updated: boolean; version: string | null; install_dir: string | null }
-}> {
-  const tempDir = await createUpdateTempDir()
-  const installerPath = `${tempDir}/install.sh`
-  await downloadUpdateInstaller(installerPath)
-  const inferredInstallDir =
-    options.installDir ?? inferInstallDirFromExecutable(process.execPath) ?? undefined
-  const status = await runUpdateInstaller(installerPath, options.version, inferredInstallDir)
-  if (status !== 0) throw new Error(`polaris update failed with status ${status}`)
-  return {
-    human: 'Update complete.',
-    json: {
-      updated: true,
-      version: options.version ?? null,
-      install_dir: inferredInstallDir ?? null,
-    },
   }
 }
 
@@ -812,6 +813,18 @@ function renderResetOutput(output: ResetOutput): string {
   return lines.join('\n')
 }
 
+function renderUpdateOutput(output: UpdateOutput): string {
+  const lines = [
+    'update',
+    `runtime: ${output.runtime_dir}`,
+    `installer: ${output.install_script}`,
+    `install dir: ${output.install_dir ?? 'default'}`,
+  ]
+  if (output.version) lines.push(`version: ${output.version}`)
+  lines.push('status: updated')
+  return lines.join('\n')
+}
+
 function formatCommandResult<T>(
   formatExplicit: boolean,
   jsonValue: T,
@@ -908,4 +921,46 @@ function compactOptional<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined),
   ) as T
+}
+
+function resolveCliRuntimeRoot(): string {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url))
+  return path.resolve(moduleDir, '../../../../..')
+}
+
+function inferInstallDirFromRuntimeRoot(runtimeDir: string): string | null {
+  const normalized = path.normalize(runtimeDir)
+  const suffixes = [
+    path.join('.polaris', 'lib', 'polaris'),
+    path.join('.tick', 'lib', 'polaris'),
+    path.join('lib', 'polaris'),
+  ]
+
+  if (suffixes.some((suffix) => normalized.endsWith(suffix))) {
+    return path.resolve(runtimeDir, '..', '..', 'bin')
+  }
+
+  return null
+}
+
+async function runInstallerScript(command: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['inherit', 'pipe', 'pipe'],
+      env: process.env,
+    })
+
+    child.stdout.on('data', (chunk) => {
+      process.stderr.write(chunk)
+    })
+    child.stderr.on('data', (chunk) => {
+      process.stderr.write(chunk)
+    })
+
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`installer exited with status ${code ?? 'unknown'}`))
+    })
+  })
 }
