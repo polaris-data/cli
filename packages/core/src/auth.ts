@@ -1,8 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import keytar from 'keytar'
-
 import { invalidArgument, otherError } from './errors.js'
 import { dataLocalDir } from './platform.js'
 
@@ -12,6 +10,13 @@ const ACCOUNT_NAME = 'polaris-api-key'
 const PRIMARY_APP_NAME = 'polaris'
 const LEGACY_APP_NAME = 'tick'
 
+type KeytarModule = {
+  getPassword(service: string, account: string): Promise<string | null>
+  setPassword(service: string, account: string, password: string): Promise<void>
+}
+
+let keytarPromise: Promise<KeytarModule> | undefined
+
 export interface CredentialStore {
   getApiKey(): Promise<string | undefined>
   setApiKey(apiKey: string): Promise<void>
@@ -20,16 +25,28 @@ export interface CredentialStore {
 export class KeychainCredentialStore implements CredentialStore {
   async getApiKey(): Promise<string | undefined> {
     let readError: Error | undefined
+    let keytar: KeytarModule | undefined
 
-    for (const service of [PRIMARY_SERVICE_NAME, LEGACY_SERVICE_NAME]) {
-      try {
-        const value = trimValue(await keytar.getPassword(service, ACCOUNT_NAME))
-        if (value) return value
-      } catch (error) {
-        readError ??= otherError(
-          `failed to read Polaris API key from OS credential store: ${String(error)}`,
-          error,
-        )
+    try {
+      keytar = await loadKeytar()
+    } catch (error) {
+      readError = otherError(
+        `failed to read Polaris API key from OS credential store: ${String(error)}`,
+        error,
+      )
+    }
+
+    if (keytar) {
+      for (const service of [PRIMARY_SERVICE_NAME, LEGACY_SERVICE_NAME]) {
+        try {
+          const value = trimValue(await keytar.getPassword(service, ACCOUNT_NAME))
+          if (value) return value
+        } catch (error) {
+          readError ??= otherError(
+            `failed to read Polaris API key from OS credential store: ${String(error)}`,
+            error,
+          )
+        }
       }
     }
 
@@ -48,6 +65,7 @@ export class KeychainCredentialStore implements CredentialStore {
 
     let keychainError: unknown
     try {
+      const keytar = await loadKeytar()
       await keytar.setPassword(PRIMARY_SERVICE_NAME, ACCOUNT_NAME, trimmed)
       try {
         await keytar.setPassword(LEGACY_SERVICE_NAME, ACCOUNT_NAME, trimmed)
@@ -107,4 +125,12 @@ export async function writeFallbackApiKey(appName: string, apiKey: string): Prom
 function trimValue(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim()
   return trimmed ? trimmed : undefined
+}
+
+async function loadKeytar(): Promise<KeytarModule> {
+  keytarPromise ??= import('keytar').then((module) => {
+    const keytar = (module as { default?: KeytarModule }).default ?? (module as KeytarModule)
+    return keytar
+  })
+  return keytarPromise
 }
