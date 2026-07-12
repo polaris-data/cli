@@ -7,7 +7,7 @@ import type { ApiKeySource, Config } from './types.js'
 import type { CredentialStore } from './auth.js'
 
 export const DEFAULT_BASE_URL = 'https://api.polaris.supply'
-export const DEFAULT_CONCURRENCY = 4
+export const DEFAULT_CONCURRENCY = 16
 export const DEFAULT_TIMEOUT_SECS = 60
 export const ROOT_ENV_VAR = 'POLARIS_ROOT'
 export const LEGACY_ROOT_ENV_VAR = 'TICK_ROOT'

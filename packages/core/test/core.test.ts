@@ -30,6 +30,19 @@ test('env API key overrides stored key', async () => {
   assert.equal(config.apiKeySource, 'environment')
 })
 
+test('loadConfig defaults concurrency to 16', async () => {
+  const config = await loadConfig(
+    () => undefined,
+    {
+      async getApiKey() {
+        return undefined
+      },
+      async setApiKey() {},
+    },
+  )
+  assert.equal(config.concurrency, 16)
+})
+
 test('selectDefaultRoot prefers existing legacy root until new root exists', async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'polaris-core-'))
   const primary = path.join(temp, 'polaris')
