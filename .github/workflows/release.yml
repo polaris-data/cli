@@ -249,7 +249,62 @@ jobs:
           tar -czf "dist/${archive_name}" -C "${package_root}" polaris
 
           tar -xzf "dist/${archive_name}" -C "${verify_root}"
-          "${verify_root}/polaris/polaris" --version | grep -Fx "${{ needs.validate.outputs.version }}"
+          bundled_node="${verify_root}/polaris/${{ matrix.node_name }}"
+          bundled_entrypoint="${verify_root}/polaris/app/dist/cli/src/index.js"
+          expected_version="${{ needs.validate.outputs.version }}"
+          system_node_output_file="${verify_root}/system-node-output.txt"
+          bundled_node_output_file="${verify_root}/bundled-node-output.txt"
+          bundled_cli_output_file="${verify_root}/bundled-cli-output.txt"
+
+          if ! node "${bundled_entrypoint}" --version >"${system_node_output_file}" 2>&1; then
+            system_node_version="$(cat "${system_node_output_file}")"
+            echo "Extracted app tree failed before the bundled runtime was used." >&2
+            echo "Expected CLI version: ${expected_version}" >&2
+            echo "System-node CLI output:" >&2
+            printf '%s\n' "${system_node_version}" >&2
+            exit 1
+          fi
+          system_node_version="$(cat "${system_node_output_file}")"
+          if [[ "${system_node_version}" != "${expected_version}" ]]; then
+            echo "Extracted app tree is not runnable with the runner Node runtime." >&2
+            echo "Expected CLI version: ${expected_version}" >&2
+            echo "Actual system-node CLI version output: ${system_node_version}" >&2
+            exit 1
+          fi
+
+          if ! "${bundled_node}" --version >"${bundled_node_output_file}" 2>&1; then
+            bundled_node_version="$(cat "${bundled_node_output_file}")"
+            echo "Bundled Node runtime failed to start." >&2
+            echo "Bundled node path: ${bundled_node}" >&2
+            echo "Bundled node output:" >&2
+            printf '%s\n' "${bundled_node_version}" >&2
+            if [[ "${RUNNER_OS}" == "macOS" ]]; then
+              file "${bundled_node}" >&2 || true
+              otool -L "${bundled_node}" >&2 || true
+            fi
+            exit 1
+          fi
+          bundled_node_version="$(cat "${bundled_node_output_file}")"
+
+          if ! "${verify_root}/polaris/polaris" --version >"${bundled_cli_output_file}" 2>&1; then
+            bundled_cli_version="$(cat "${bundled_cli_output_file}")"
+            echo "Bundled Polaris launcher failed to print a version." >&2
+            echo "Expected CLI version: ${expected_version}" >&2
+            echo "Bundled node version output: ${bundled_node_version}" >&2
+            echo "Bundled launcher output:" >&2
+            printf '%s\n' "${bundled_cli_version}" >&2
+            exit 1
+          fi
+          bundled_cli_version="$(cat "${bundled_cli_output_file}")"
+
+          if [[ "${bundled_cli_version}" != "${expected_version}" ]]; then
+            echo "Bundled Polaris launcher reported an unexpected version string." >&2
+            echo "Expected CLI version: ${expected_version}" >&2
+            echo "Bundled node version output: ${bundled_node_version}" >&2
+            echo "Bundled launcher output:" >&2
+            printf '%s\n' "${bundled_cli_version}" >&2
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
