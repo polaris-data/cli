@@ -17,12 +17,12 @@ usage() {
   cat <<'EOF'
 Usage: install.sh [--version <tag>] [--install-dir <path>] [--runtime-dir <path>]
 
-Build and install the Polaris TypeScript CLI from source.
-
-By default, installs the current main branch. Use --version to install a specific tag.
+Install the Polaris CLI.
+By default, installs the latest bundled release for your platform.
+If release assets are unavailable, it falls back to building from source.
 
 Options:
-  --version <tag>      Build a specific Git tag, for example: v0.7.0
+  --version <tag>      Install a specific release tag, for example: v0.7.0
   --install-dir <dir>  Install directory for the polaris launcher
   --runtime-dir <dir>  Runtime directory for the built workspace
   -h, --help           Show this help text
@@ -127,7 +127,62 @@ ensure_node_version() {
   fi
 }
 
-resolve_ref() {
+detect_target() {
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+
+  case "${os}:${arch}" in
+    Darwin:x86_64)
+      printf '%s\n' 'x86_64-apple-darwin'
+      ;;
+    Darwin:arm64)
+      printf '%s\n' 'aarch64-apple-darwin'
+      ;;
+    Linux:x86_64)
+      printf '%s\n' 'x86_64-unknown-linux-gnu'
+      ;;
+    Linux:aarch64|Linux:arm64)
+      printf '%s\n' 'aarch64-unknown-linux-gnu'
+      ;;
+    *)
+      fail "unsupported platform: ${os} ${arch}"
+      ;;
+  esac
+}
+
+resolve_latest_version() {
+  local response
+  response="$(
+    curl -fsSL \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      "https://api.github.com/repos/${REPO}/releases/latest" \
+      2>/dev/null || true
+  )"
+
+  printf '%s' "$response" \
+    | tr -d '\n' \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+resolve_release_ref() {
+  if [[ -n "$REQUESTED_VERSION" ]]; then
+    printf '%s\n' "$REQUESTED_VERSION"
+    return 0
+  fi
+
+  local latest
+  latest="$(resolve_latest_version)"
+  if [[ -n "$latest" ]]; then
+    printf '%s\n' "$latest"
+    return 0
+  fi
+
+  return 1
+}
+
+resolve_source_ref() {
   if [[ -n "$REQUESTED_VERSION" ]]; then
     printf '%s\n' "$REQUESTED_VERSION"
     return 0
@@ -148,6 +203,17 @@ download_source_archive() {
   fi
 
   log "downloading source for ${ref}"
+  curl -fsSL "$archive_url" -o "$archive_path"
+}
+
+download_release_bundle() {
+  local ref="$1"
+  local target="$2"
+  local archive_path="$3"
+  local archive_name="polaris-${ref}-${target}.tar.gz"
+  local archive_url="https://github.com/${REPO}/releases/download/${ref}/${archive_name}"
+
+  log "downloading ${archive_name}"
   curl -fsSL "$archive_url" -o "$archive_path"
 }
 
@@ -177,6 +243,25 @@ stage_source_tree() {
   download_source_archive "$ref" "$archive_path"
   tar -xzf "$archive_path" -C "$work_dir"
   find "$work_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1
+}
+
+stage_release_bundle() {
+  local ref="$1"
+  local target="$2"
+  local work_dir="$3"
+  local archive_path="${work_dir}/polaris-${ref}-${target}.tar.gz"
+  local extracted_root="${work_dir}/bundle"
+
+  download_release_bundle "$ref" "$target" "$archive_path"
+  mkdir -p "$extracted_root"
+  tar -xzf "$archive_path" -C "$extracted_root"
+
+  if [[ -d "${extracted_root}/polaris" ]]; then
+    printf '%s\n' "${extracted_root}/polaris"
+    return 0
+  fi
+
+  fail "release archive did not contain a polaris/ directory"
 }
 
 resolve_pnpm() {
@@ -210,6 +295,25 @@ build_workspace() {
     || fail "built CLI entrypoint not found at packages/cli/dist/cli/src/index.js"
 }
 
+create_source_runtime_launcher() {
+  local resolved_runtime_dir="$1"
+  local cli_entry="${resolved_runtime_dir}/packages/cli/dist/cli/src/index.js"
+  local launcher_path="${resolved_runtime_dir}/${PROJECT}"
+  local launcher_tmp="${launcher_path}.tmp.$$"
+  local cli_entry_escaped
+
+  [[ -f "$cli_entry" ]] || fail "installed CLI entrypoint not found: ${cli_entry}"
+
+  cli_entry_escaped="$(printf '%q' "$cli_entry")"
+  cat >"$launcher_tmp" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec node ${cli_entry_escaped} "\$@"
+EOF
+  chmod 0755 "$launcher_tmp"
+  mv "$launcher_tmp" "$launcher_path"
+}
+
 install_runtime_tree() {
   local source_dir="$1"
   local resolved_runtime_dir="$2"
@@ -225,24 +329,46 @@ install_runtime_tree() {
 
   rm -rf "$resolved_runtime_dir"
   mv "$runtime_tmp" "$resolved_runtime_dir"
+  create_source_runtime_launcher "$resolved_runtime_dir"
+}
+
+install_bundle_tree() {
+  local bundle_dir="$1"
+  local resolved_runtime_dir="$2"
+  local runtime_parent runtime_tmp
+
+  runtime_parent="$(dirname "$resolved_runtime_dir")"
+  runtime_tmp="${resolved_runtime_dir}.tmp.$$"
+
+  mkdir -p "$runtime_parent"
+  rm -rf "$runtime_tmp"
+  mkdir -p "$runtime_tmp"
+  tar -C "$bundle_dir" -cf - . | tar -C "$runtime_tmp" -xf -
+
+  [[ -f "${runtime_tmp}/${PROJECT}" ]] || fail "release bundle did not contain ${PROJECT} launcher"
+  [[ -f "${runtime_tmp}/install.sh" ]] || fail "release bundle did not contain install.sh"
+  [[ -f "${runtime_tmp}/node" ]] || fail "release bundle did not contain bundled node runtime"
+
+  rm -rf "$resolved_runtime_dir"
+  mv "$runtime_tmp" "$resolved_runtime_dir"
 }
 
 install_launcher() {
   local resolved_runtime_dir="$1"
-  local launcher_tmp launcher_path cli_entry cli_entry_escaped
+  local launcher_tmp launcher_path runtime_launcher runtime_launcher_escaped
 
-  cli_entry="${resolved_runtime_dir}/packages/cli/dist/cli/src/index.js"
-  [[ -f "$cli_entry" ]] || fail "installed CLI entrypoint not found: ${cli_entry}"
+  runtime_launcher="${resolved_runtime_dir}/${PROJECT}"
+  [[ -f "$runtime_launcher" ]] || fail "installed runtime launcher not found: ${runtime_launcher}"
 
   mkdir -p "$INSTALL_DIR"
   launcher_path="${INSTALL_DIR}/${PROJECT}"
   launcher_tmp="${launcher_path}.tmp.$$"
-  cli_entry_escaped="$(printf '%q' "$cli_entry")"
+  runtime_launcher_escaped="$(printf '%q' "$runtime_launcher")"
 
   cat >"$launcher_tmp" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec node ${cli_entry_escaped} "\$@"
+exec ${runtime_launcher_escaped} "\$@"
 EOF
 
   chmod 0755 "$launcher_tmp"
@@ -306,20 +432,38 @@ ensure_path() {
 }
 
 main() {
-  local ref work_dir source_dir resolved_runtime_dir version_label
+  local ref work_dir source_dir bundle_dir resolved_runtime_dir version_label target
 
   parse_args "$@"
   require_command curl
   require_command tar
   apply_default_install_dir
-  ensure_node_version
-
-  ref="$(resolve_ref)"
-  version_label="$ref"
   resolved_runtime_dir="$(default_runtime_dir)"
   work_dir="$(mktemp -d)"
   trap "rm -rf '$work_dir'" EXIT
 
+  if [[ -z "$SOURCE_DIR_OVERRIDE" ]]; then
+    target="$(detect_target)"
+    if ref="$(resolve_release_ref)"; then
+      if bundle_dir="$(stage_release_bundle "$ref" "$target" "$work_dir" 2>/dev/null)"; then
+        version_label="$ref"
+        install_bundle_tree "$bundle_dir" "$resolved_runtime_dir"
+        install_launcher "$resolved_runtime_dir"
+        ensure_path
+        log "installed ${PROJECT} (${version_label}) to ${INSTALL_DIR}/${PROJECT}"
+        log "runtime installed at ${resolved_runtime_dir}"
+        log "run '${PROJECT} --help' to get started"
+        return 0
+      fi
+      log "release bundle for ${ref} (${target}) unavailable; falling back to source build"
+    else
+      log "could not resolve latest release; falling back to source build"
+    fi
+  fi
+
+  ensure_node_version
+  ref="$(resolve_source_ref)"
+  version_label="$ref"
   source_dir="$(stage_source_tree "$ref" "$work_dir" "$SOURCE_DIR_OVERRIDE")"
   build_workspace "$source_dir"
   install_runtime_tree "$source_dir" "$resolved_runtime_dir"

@@ -27,12 +27,14 @@
 curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash
 ```
 
-The installer builds the TypeScript CLI locally from the current `main` branch, so it requires Node.js 22+.
+The installer downloads the latest bundled release for your platform, so a local Node.js toolchain is not required for the normal install path.
 To install a specific tagged version instead, run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --version v0.7.0
 ```
+
+If no matching release asset is available for your platform, the installer falls back to building from source, which requires Node.js 22+.
 
 ### 2. Browse via TUI
 
@@ -96,6 +98,8 @@ polaris account
 pnpm install
 pnpm build:ts
 ```
+
+Building from source requires Node.js 22+.
 
 ## CLI Overview
 
@@ -219,7 +223,7 @@ polaris reset --json
 
 ### `polaris update`
 
-Reinstalls or updates Polaris by rerunning the bundled `install.sh` from the current runtime. By default it updates to the current `main` branch; use `--version` to pin a specific tag.
+Reinstalls or updates Polaris by rerunning the bundled `install.sh` from the current runtime. By default it updates to the latest packaged release for your platform; use `--version` to pin a specific tag.
 
 ```bash
 polaris update
@@ -316,5 +320,5 @@ Useful local commands:
 pnpm build:ts
 pnpm check:ts
 pnpm test:ts
-node packages/cli/dist/index.js --help
+node packages/cli/dist/cli/src/index.js --help
 ```

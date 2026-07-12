@@ -170,17 +170,36 @@ jobs:
           echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
           echo "version=${version}" >>"${GITHUB_OUTPUT}"
 
-  package:
+  build:
     needs:
       - prepare
       - validate
     if: needs.prepare.outputs.should_release == 'true'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+            node_name: node
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive_ext: tar.gz
+            node_name: node
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+            node_name: node
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+            node_name: node
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
-          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -191,71 +210,70 @@ jobs:
           version: 9.12.0
           run_install: false
 
-      - name: Package source archive
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: pnpm build:ts
+
+      - name: Create portable app package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf deployed
+          pnpm --filter @polaris/cli --prod deploy deployed/cli
+
+      - name: Package runtime bundle
         shell: bash
         run: |
           set -euo pipefail
 
           tag="${{ needs.validate.outputs.tag }}"
-          archive_name="polaris-${tag}-source.tar.gz"
+          target="${{ matrix.target }}"
+          archive_name="polaris-${tag}-${target}.${{ matrix.archive_ext }}"
+          package_root="$(mktemp -d)"
+          verify_root="$(mktemp -d)"
+          trap 'rm -rf "${package_root}" "${verify_root}"' EXIT
+
+          mkdir -p "${package_root}/polaris/app"
+          cp install.sh "${package_root}/polaris/install.sh"
+          cp "$(command -v node)" "${package_root}/polaris/${{ matrix.node_name }}"
+          chmod 0755 "${package_root}/polaris/install.sh" "${package_root}/polaris/${{ matrix.node_name }}"
+          cp -R deployed/cli/. "${package_root}/polaris/app/"
+
+          cat >"${package_root}/polaris/polaris" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          exec "${SELF_DIR}/node" "${SELF_DIR}/app/dist/cli/src/index.js" "$@"
+          EOF
+          chmod 0755 "${package_root}/polaris/polaris"
 
           mkdir -p dist
-          git archive --format=tar.gz --output="dist/${archive_name}" "${{ needs.prepare.outputs.source_ref }}"
-          cp install.sh dist/install.sh
-          chmod 0755 dist/install.sh
+          tar -czf "dist/${archive_name}" -C "${package_root}" polaris
 
-      - name: Smoke test installer from packaged source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          tag="${{ needs.validate.outputs.tag }}"
-          archive_name="polaris-${tag}-source.tar.gz"
-          verify_dir="$(mktemp -d)"
-          install_home="$(mktemp -d)"
-          trap 'rm -rf "${verify_dir}" "${install_home}"' EXIT
-
-          tar -xzf "dist/${archive_name}" -C "${verify_dir}"
-
-          source_root="${verify_dir}"
-          if [[ -d "${verify_dir}/cli" ]]; then
-            source_root="${verify_dir}/cli"
-          fi
-
-          HOME="${install_home}" POLARIS_INSTALL_SOURCE_DIR="${source_root}" \
-            bash dist/install.sh --install-dir "${install_home}/bin"
-
-          HOME="${install_home}" "${install_home}/bin/polaris" --version | grep -Fx "${{ needs.validate.outputs.version }}"
-
-      - name: Generate checksums
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd dist
-          sha256sum "polaris-${{ needs.validate.outputs.tag }}-source.tar.gz" install.sh > "polaris-${{ needs.validate.outputs.tag }}-checksums.txt"
+          tar -xzf "dist/${archive_name}" -C "${verify_root}"
+          "${verify_root}/polaris/polaris" --version | grep -Fx "${{ needs.validate.outputs.version }}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-assets
-          path: |
-            dist/polaris-${{ needs.validate.outputs.tag }}-source.tar.gz
-            dist/install.sh
-            dist/polaris-${{ needs.validate.outputs.tag }}-checksums.txt
+          name: release-${{ matrix.target }}
+          path: dist/polaris-${{ needs.validate.outputs.tag }}-${{ matrix.target }}.${{ matrix.archive_ext }}
           if-no-files-found: error
 
   publish:
     needs:
       - prepare
       - validate
-      - package
+      - build
     if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: release-assets
+          pattern: release-*
           merge-multiple: true
 
       - name: Create release tag
@@ -282,12 +300,19 @@ jobs:
             "https://api.github.com/repos/${{ github.repository }}/git/refs" \
             --data @"${payload}"
 
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd dist
+          shasum -a 256 polaris-${{ needs.validate.outputs.tag }}-*.tar.gz > polaris-${{ needs.validate.outputs.tag }}-checksums.txt
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate.outputs.tag }}
           generate_release_notes: true
           files: |
-            dist/polaris-${{ needs.validate.outputs.tag }}-source.tar.gz
-            dist/install.sh
+            dist/polaris-${{ needs.validate.outputs.tag }}-*.tar.gz
             dist/polaris-${{ needs.validate.outputs.tag }}-checksums.txt
