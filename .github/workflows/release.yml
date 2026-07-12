@@ -1,13 +1,6 @@
 name: release
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*.*.*'
-    paths:
-      - 'packages/cli/src/index.ts'
   workflow_dispatch:
     inputs:
       tag:
