@@ -124,6 +124,9 @@ type UpdateOutput = z.infer<typeof updateOutputSchema>
 export const cli = Cli.create('polaris', {
   version,
   description: 'Download Polaris market data snapshots',
+  sync: {
+    depth: 0,
+  },
   async run(c) {
     const config = await loadRuntimeConfig()
     const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs)
