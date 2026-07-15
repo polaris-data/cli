@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Cli, z } from 'incur'
 import { spawn } from 'node:child_process'
+import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createInterface } from 'node:readline/promises'
@@ -30,6 +31,8 @@ import {
 
 const version = '0.8.0'
 const MIN_CLI_AUTH_POLL_INTERVAL_MS = 250
+
+const defaultMcpCommand = resolveDefaultMcpCommand()
 
 const remoteDatasetSchema = z
   .object({
@@ -124,6 +127,9 @@ type UpdateOutput = z.infer<typeof updateOutputSchema>
 export const cli = Cli.create('polaris', {
   version,
   description: 'Download Polaris market data snapshots',
+  mcp: {
+    command: defaultMcpCommand,
+  },
   sync: {
     depth: 0,
   },
@@ -394,6 +400,49 @@ export async function isDirectCliExecution(
   } catch {
     return path.resolve(fileURLToPath(moduleUrl)) === path.resolve(entryArg)
   }
+}
+
+export function resolveDefaultMcpCommand(
+  entryArg: string | undefined = process.argv[1],
+  runtimePath: string | undefined = process.execPath,
+): string {
+  const installedBinary = resolveInstalledPolarisBinary(entryArg)
+  if (installedBinary) return `${quoteCommandArg(installedBinary)} --mcp`
+
+  const nodeScript = resolveNodeScriptEntry(entryArg)
+  if (nodeScript && runtimePath) {
+    return `${quoteCommandArg(runtimePath)} ${quoteCommandArg(nodeScript)} --mcp`
+  }
+
+  return 'polaris --mcp'
+}
+
+function resolveInstalledPolarisBinary(entryArg: string | undefined): string | null {
+  if (!entryArg) return null
+  const resolved = resolvePathForCommand(entryArg)
+  const normalized = path.basename(resolved).toLowerCase()
+  return normalized === 'polaris' || normalized === 'polaris.cmd' || normalized === 'polaris.ps1'
+    ? resolved
+    : null
+}
+
+function resolveNodeScriptEntry(entryArg: string | undefined): string | null {
+  if (!entryArg) return null
+  const resolved = resolvePathForCommand(entryArg)
+  const extension = path.extname(resolved).toLowerCase()
+  return extension === '.js' || extension === '.mjs' || extension === '.cjs' ? resolved : null
+}
+
+function resolvePathForCommand(filePath: string): string {
+  try {
+    return fsSync.realpathSync(filePath)
+  } catch {
+    return path.resolve(filePath)
+  }
+}
+
+function quoteCommandArg(value: string): string {
+  return /[\s"]/.test(value) ? JSON.stringify(value) : value
 }
 
 if (await isDirectCliExecution(import.meta.url, process.argv[1])) {
