@@ -29,7 +29,7 @@ import {
   type SyncPlan,
 } from '@polaris/core'
 
-const version = '0.8.0'
+const version = '0.8.1'
 const MIN_CLI_AUTH_POLL_INTERVAL_MS = 250
 
 const defaultMcpCommand = resolveDefaultMcpCommand()

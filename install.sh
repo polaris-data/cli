@@ -22,7 +22,7 @@ By default, installs the latest bundled release for your platform.
 If release assets are unavailable, it falls back to building from source.
 
 Options:
-  --version <tag>      Install a specific release tag, for example: v0.8.0
+  --version <tag>      Install a specific release tag, for example: v0.8.1
   --install-dir <dir>  Install directory for the polaris launcher
   --runtime-dir <dir>  Runtime directory for the built workspace
   -h, --help           Show this help text
