@@ -5,7 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 
-import { cli, isDirectCliExecution } from './index.js'
+import { cli, isDirectCliExecution, resolveDefaultMcpCommand } from './index.js'
 import { basicFixture, MockPolarisServer } from '../../core/test/support/mock-server.js'
 
 async function serve(argv: string[]) {
@@ -141,4 +141,36 @@ test('direct execution detection resolves symlinked entry paths', async () => {
     await isDirectCliExecution(pathToFileURL(modulePath).href, path.join(realTemp, 'other.js')),
     false,
   )
+})
+
+test('mcp registration prefers the installed polaris binary path', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'polaris-cli-bin-'))
+  const installDir = path.join(temp, 'bin dir')
+  const binaryPath = path.join(installDir, 'polaris')
+  await fs.mkdir(installDir, { recursive: true })
+  await fs.writeFile(binaryPath, '')
+  const resolvedBinaryPath = await fs.realpath(binaryPath)
+
+  assert.equal(
+    resolveDefaultMcpCommand(binaryPath, '/usr/local/bin/node'),
+    `${JSON.stringify(resolvedBinaryPath)} --mcp`,
+  )
+})
+
+test('mcp registration falls back to node plus script entry for built sources', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'polaris-cli-script-'))
+  const entryPath = path.join(temp, 'dist/cli/src/index.js')
+  await fs.mkdir(path.dirname(entryPath), { recursive: true })
+  await fs.writeFile(entryPath, '')
+  const resolvedEntryPath = await fs.realpath(entryPath)
+
+  assert.equal(
+    resolveDefaultMcpCommand(entryPath, '/usr/local/bin/node'),
+    `/usr/local/bin/node ${resolvedEntryPath} --mcp`,
+  )
+})
+
+test('mcp registration falls back to bare polaris command when no safe path is available', () => {
+  assert.equal(resolveDefaultMcpCommand(undefined, '/usr/local/bin/node'), 'polaris --mcp')
+  assert.equal(resolveDefaultMcpCommand('src/index.ts', '/usr/local/bin/node'), 'polaris --mcp')
 })

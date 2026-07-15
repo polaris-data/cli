@@ -36,19 +36,35 @@ curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | 
 
 If no matching release asset is available for your platform, the installer falls back to building from source, which requires Node.js 22+.
 
-### 2. Browse via TUI
+### 2. Optional: Set up your agent
+
+Prompt your agent:
+
+**Skills (recommended)**
+
+```txt
+Run `polaris skills add`, then show me how to browse and download market datasets with Polaris.
+```
+
+**MCP**
+
+```txt
+Run `polaris mcp add`, then show me how to browse and download market datasets with Polaris.
+```
+
+### 3. Browse via TUI
 
 ```bash
 polaris
 ```
 
-### 3. Browse remote datasets
+### 4. Browse remote datasets
 
 ```bash
 polaris catalog --source hyperliquid --market BTCUSDT
 ```
 
-### 4. Download one time range
+### 5. Download one time range
 
 ```bash
 polaris download \
@@ -58,7 +74,7 @@ polaris download \
   --to 2026-06-02T00:00:00Z
 ```
 
-### 5. Inspect local data
+### 6. Inspect local data
 
 ```bash
 polaris list --source hyperliquid --market BTCUSDT
@@ -66,7 +82,7 @@ polaris list --source hyperliquid --market BTCUSDT
 
 After download completes, Polaris stores the fetched snapshot files under its managed local root.
 
-### 6. Optional: Sign in for more datasets
+### 7. Optional: Sign in for more datasets
 
 To sign in with the browser flow and save the returned API key locally:
 
