@@ -174,3 +174,12 @@ test('mcp registration falls back to bare polaris command when no safe path is a
   assert.equal(resolveDefaultMcpCommand(undefined, '/usr/local/bin/node'), 'polaris --mcp')
   assert.equal(resolveDefaultMcpCommand('src/index.ts', '/usr/local/bin/node'), 'polaris --mcp')
 })
+
+test('--llms-full includes Polaris docs references in the root skill output', async () => {
+  const result = await serve(['--llms-full'])
+  assert.match(result.output, /https:\/\/docs\.polaris\.supply/)
+  assert.match(result.output, /https:\/\/docs\.polaris\.supply\/llms\.txt/)
+  assert.match(result.output, /https:\/\/docs\.polaris\.supply\/sdks\/python/)
+  assert.match(result.output, /https:\/\/docs\.polaris\.supply\/sdks\/typescript/)
+  assert.match(result.output, /https:\/\/www\.polaris\.supply\/llms\.txt/)
+})

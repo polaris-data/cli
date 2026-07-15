@@ -127,6 +127,13 @@ type UpdateOutput = z.infer<typeof updateOutputSchema>
 export const cli = Cli.create('polaris', {
   version,
   description: 'Download Polaris market data snapshots',
+  hint: [
+    'Docs: https://docs.polaris.supply',
+    'Docs index: https://docs.polaris.supply/llms.txt',
+    'Python SDK: https://docs.polaris.supply/sdks/python',
+    'TypeScript SDK: https://docs.polaris.supply/sdks/typescript',
+    'Platform LLM reference: https://www.polaris.supply/llms.txt',
+  ].join('\n'),
   mcp: {
     command: defaultMcpCommand,
   },
