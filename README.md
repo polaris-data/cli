@@ -31,7 +31,7 @@ The installer downloads the latest bundled release for your platform, so a local
 To install a specific tagged version instead, run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --version v0.8.0
+curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --version v0.8.1
 ```
 
 If no matching release asset is available for your platform, the installer falls back to building from source, which requires Node.js 22+.
@@ -243,7 +243,7 @@ Reinstalls or updates Polaris by rerunning the bundled `install.sh` from the cur
 
 ```bash
 polaris update
-polaris update --version v0.8.0
+polaris update --version v0.8.1
 polaris update --json
 ```
 

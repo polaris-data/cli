@@ -29,7 +29,7 @@ import {
   type SyncPlan,
 } from '@polaris/core'
 
-const version = '0.8.0'
+const version = '0.8.1'
 const MIN_CLI_AUTH_POLL_INTERVAL_MS = 250
 
 const defaultMcpCommand = resolveDefaultMcpCommand()
@@ -126,7 +126,15 @@ type UpdateOutput = z.infer<typeof updateOutputSchema>
 
 export const cli = Cli.create('polaris', {
   version,
-  description: 'Download Polaris market data snapshots',
+  description:
+    'Before using Polaris commands, read https://docs.polaris.supply/llms.txt for the docs map and workflow guidance. Use Polaris to browse and download market data snapshots.',
+  hint: [
+    'Start here: read https://docs.polaris.supply/llms.txt before using Polaris commands.',
+    'Docs: https://docs.polaris.supply',
+    'Python SDK: https://docs.polaris.supply/sdks/python',
+    'TypeScript SDK: https://docs.polaris.supply/sdks/typescript',
+    'Platform LLM reference: https://www.polaris.supply/llms.txt',
+  ].join('\n'),
   mcp: {
     command: defaultMcpCommand,
   },
