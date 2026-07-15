@@ -177,8 +177,15 @@ test('mcp registration falls back to bare polaris command when no safe path is a
 
 test('--llms-full includes Polaris docs references in the root skill output', async () => {
   const result = await serve(['--llms-full'])
+  assert.match(
+    result.output,
+    /Before using Polaris commands, read https:\/\/docs\.polaris\.supply\/llms\.txt/,
+  )
+  assert.match(
+    result.output,
+    /Start here: read https:\/\/docs\.polaris\.supply\/llms\.txt before using Polaris commands\./,
+  )
   assert.match(result.output, /https:\/\/docs\.polaris\.supply/)
-  assert.match(result.output, /https:\/\/docs\.polaris\.supply\/llms\.txt/)
   assert.match(result.output, /https:\/\/docs\.polaris\.supply\/sdks\/python/)
   assert.match(result.output, /https:\/\/docs\.polaris\.supply\/sdks\/typescript/)
   assert.match(result.output, /https:\/\/www\.polaris\.supply\/llms\.txt/)
