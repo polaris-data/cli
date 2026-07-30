@@ -45,12 +45,10 @@ curl -fsSL https://github.com/polaris-data/cli/releases/download/v0.8.3/install.
 
 The standalone executable includes its runtime, so Node.js and Bun are not required.
 
-The repository bootstrap script remains available for compatibility and delegates to the
-generated installer for the selected release:
+The release asset URL is stable and always resolves to the latest release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | \
-  bash -s -- --version v0.8.3
+curl -fsSL https://github.com/polaris-data/cli/releases/latest/download/install.sh | sh
 ```
 
 ### 2. Optional: Set up your agent
