@@ -14,7 +14,7 @@ Install the Polaris standalone executable from GitHub Releases.
 By default, installs the latest stable release for this platform.
 
 Options:
-  --version <tag>      Install a specific release tag, for example: v0.8.2
+  --version <tag>      Install a specific release tag, for example: v0.8.3
   --install-dir <dir>  Install the polaris executable into this directory
   -h, --help           Show this help text
 

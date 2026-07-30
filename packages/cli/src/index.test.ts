@@ -181,8 +181,8 @@ test('mcp registration falls back to bare polaris command when no safe path is a
 })
 
 test('CLI version prefers Incur embedded metadata and falls back to package metadata', () => {
-  assert.equal(resolveCliVersion('1.2.3', '0.8.2'), '1.2.3')
-  assert.equal(resolveCliVersion(undefined, '0.8.2'), '0.8.2')
+  assert.equal(resolveCliVersion('1.2.3', '0.8.3'), '1.2.3')
+  assert.equal(resolveCliVersion(undefined, '0.8.3'), '0.8.3')
 })
 
 test('legacy update subcommand is not advertised', async () => {

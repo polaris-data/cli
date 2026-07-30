@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import {
+  KeychainCredentialStore,
   Layout,
   PolarisClient,
   acquireSyncLock,
@@ -41,6 +42,34 @@ test('loadConfig defaults concurrency to 16', async () => {
     },
   )
   assert.equal(config.concurrency, 16)
+})
+
+test('unavailable native credential storage uses the file-backed store', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'polaris-credentials-'))
+  const previousHome = process.env.HOME
+  const previousLocalAppData = process.env.LOCALAPPDATA
+  const previousXdgDataHome = process.env.XDG_DATA_HOME
+  const previousWarn = console.warn
+  const warnings: string[] = []
+  process.env.HOME = temp
+  process.env.LOCALAPPDATA = temp
+  process.env.XDG_DATA_HOME = temp
+  console.warn = (message) => warnings.push(String(message))
+
+  try {
+    const store = new KeychainCredentialStore(async () => {
+      throw new Error('native credential module unavailable')
+    })
+    assert.equal(await store.getApiKey(), undefined)
+    await store.setApiKey('fallback-key')
+    assert.equal(await store.getApiKey(), 'fallback-key')
+    assert.equal(warnings.length, 1)
+  } finally {
+    console.warn = previousWarn
+    restoreEnvironment('HOME', previousHome)
+    restoreEnvironment('LOCALAPPDATA', previousLocalAppData)
+    restoreEnvironment('XDG_DATA_HOME', previousXdgDataHome)
+  }
 })
 
 test('selectDefaultRoot prefers existing legacy root until new root exists', async () => {
@@ -122,3 +151,11 @@ test('incomplete temp files classify as incomplete', async () => {
   ])
   assert.equal(snapshots[0]?.state, 'incomplete')
 })
+
+function restoreEnvironment(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name]
+  } else {
+    process.env[name] = value
+  }
+}
