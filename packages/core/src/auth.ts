@@ -15,6 +15,8 @@ type KeytarModule = {
   setPassword(service: string, account: string, password: string): Promise<void>
 }
 
+type KeytarLoader = () => Promise<KeytarModule>
+
 let keytarPromise: Promise<KeytarModule> | undefined
 
 export interface CredentialStore {
@@ -23,17 +25,17 @@ export interface CredentialStore {
 }
 
 export class KeychainCredentialStore implements CredentialStore {
+  constructor(private readonly keytarLoader: KeytarLoader = loadKeytar) {}
+
   async getApiKey(): Promise<string | undefined> {
     let readError: Error | undefined
     let keytar: KeytarModule | undefined
 
     try {
-      keytar = await loadKeytar()
-    } catch (error) {
-      readError = otherError(
-        `failed to read Polaris API key from OS credential store: ${String(error)}`,
-        error,
-      )
+      keytar = await this.keytarLoader()
+    } catch {
+      // Standalone cross-target builds may not be able to load keytar's native addon.
+      // Continue to the file-backed credential stores in that case.
     }
 
     if (keytar) {
@@ -65,7 +67,7 @@ export class KeychainCredentialStore implements CredentialStore {
 
     let keychainError: unknown
     try {
-      const keytar = await loadKeytar()
+      const keytar = await this.keytarLoader()
       await keytar.setPassword(PRIMARY_SERVICE_NAME, ACCOUNT_NAME, trimmed)
       try {
         await keytar.setPassword(LEGACY_SERVICE_NAME, ACCOUNT_NAME, trimmed)

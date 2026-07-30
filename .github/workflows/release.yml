@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build and publish, for example v0.8.2
+        description: Release tag to build and publish, for example v0.8.3
         required: true
         type: string
 
@@ -91,7 +91,7 @@ jobs:
           echo "tag=${REQUESTED_TAG}" >>"${GITHUB_OUTPUT}"
           echo "version=${root_version}" >>"${GITHUB_OUTPUT}"
 
-  stage-release:
+  release:
     needs: validate
     runs-on: ubuntu-24.04
     permissions:
@@ -111,39 +111,103 @@ jobs:
             --field ref="refs/tags/${RELEASE_TAG}" \
             --field sha="${RELEASE_SHA}"
 
-      - name: Create draft GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.validate.outputs.tag }}
-          draft: true
-          generate_release_notes: true
+      - name: Create or resume mutable GitHub release
+        id: stage
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
 
-  binaries:
-    needs:
-      - validate
-      - stage-release
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
+          releases="$(
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100"
+          )"
+          matches="$(
+            jq -c --arg tag "${RELEASE_TAG}" \
+              '[.[][] | select(.tag_name == $tag)]' <<<"${releases}"
+          )"
+          match_count="$(jq 'length' <<<"${matches}")"
+
+          if [[ "${match_count}" -gt 1 ]]; then
+            echo "Multiple GitHub releases use tag ${RELEASE_TAG}." >&2
+            exit 1
+          fi
+
+          if [[ "${match_count}" -eq 0 ]]; then
+            release="$(
+              gh api "repos/${GITHUB_REPOSITORY}/releases" \
+                --method POST \
+                --field tag_name="${RELEASE_TAG}" \
+                --field target_commitish="${RELEASE_SHA}" \
+                --field name="${RELEASE_TAG}" \
+                --field draft=false \
+                --field prerelease=false \
+                --field generate_release_notes=true
+            )"
+          else
+            release="$(jq -c '.[0]' <<<"${matches}")"
+
+            if [[ "$(jq -r '.prerelease' <<<"${release}")" != "false" ]]; then
+              echo "Release ${RELEASE_TAG} must not be a prerelease." >&2
+              exit 1
+            fi
+            if [[ "$(jq -r '.immutable // false' <<<"${release}")" == "true" ]]; then
+              echo "Release ${RELEASE_TAG} is immutable." >&2
+              exit 1
+            fi
+            if [[ "$(jq '.assets | length' <<<"${release}")" -ne 0 ]]; then
+              echo "Release ${RELEASE_TAG} already has assets; refusing to replace them." >&2
+              exit 1
+            fi
+
+            if [[ "$(jq -r '.draft' <<<"${release}")" == "true" ]]; then
+              release_id="$(jq -r '.id' <<<"${release}")"
+              release="$(
+                gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+                  --method PATCH \
+                  --field draft=false
+              )"
+            fi
+          fi
+
+          release_id="$(jq -r '.id' <<<"${release}")"
+          if [[ ! "${release_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Release ${RELEASE_TAG} has an invalid identifier." >&2
+            exit 1
+          fi
+
+          echo "release_id=${release_id}" >>"${GITHUB_OUTPUT}"
+          echo "attempt_started=true" >>"${GITHUB_OUTPUT}"
+
       - id: release
         uses: wevm/incur/release@v1
         with:
           entry: packages/cli/src/index.ts
           name: polaris
           release_tag: ${{ needs.validate.outputs.tag }}
+          smoke_command: account
 
-  publish:
-    needs:
-      - validate
-      - binaries
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Publish GitHub release
+      - name: Restore draft release after binary failure
+        if: ${{ (failure() || cancelled()) && steps.stage.outputs.attempt_started == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.stage.outputs.release_id }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-        run: gh release edit "${RELEASE_TAG}" --draft=false --latest
+        run: |
+          set -euo pipefail
+
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          while IFS= read -r asset_id; do
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+              --method DELETE
+          done < <(jq -r '.assets[].id' <<<"${release}")
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            --method PATCH \
+            --field draft=true >/dev/null
+          echo "Returned ${RELEASE_TAG} to draft after binary generation failed." >&2
