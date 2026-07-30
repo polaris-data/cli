@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { Cli, z } from 'incur'
-import { spawn } from 'node:child_process'
+import { Binary, Cli, z } from 'incur'
 import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -8,6 +7,7 @@ import { createInterface } from 'node:readline/promises'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import packageJson from '../package.json' with { type: 'json' }
 import {
   KeychainCredentialStore,
   Layout,
@@ -29,7 +29,6 @@ import {
   type SyncPlan,
 } from '@polaris/core'
 
-const version = '0.8.1'
 const MIN_CLI_AUTH_POLL_INTERVAL_MS = 250
 
 const defaultMcpCommand = resolveDefaultMcpCommand()
@@ -108,24 +107,14 @@ const resetOutputSchema = z.object({
   removed_roots: z.array(z.string()),
 })
 
-const updateOutputSchema = z.object({
-  command: z.literal('update'),
-  install_script: z.string(),
-  runtime_dir: z.string(),
-  install_dir: z.string().nullable(),
-  version: z.string().nullable(),
-  status: z.literal('updated'),
-})
-
 type RemoteDatasetEntry = z.infer<typeof remoteDatasetSchema>
 type RemoteListOutput = z.infer<typeof remoteListOutputSchema>
 type LocalListOutput = z.infer<typeof localListOutputSchema>
 type SyncOutput = z.infer<typeof syncOutputSchema>
 type ResetOutput = z.infer<typeof resetOutputSchema>
-type UpdateOutput = z.infer<typeof updateOutputSchema>
-
 export const cli = Cli.create('polaris', {
-  version,
+  version: resolveCliVersion(),
+  update: Binary.github({ repository: 'polaris-data/cli' }),
   description:
     'Before using Polaris commands, read https://docs.polaris.supply/llms.txt for the docs map and workflow guidance. Use Polaris to browse and download market data snapshots.',
   hint: [
@@ -377,22 +366,6 @@ cli.command('reset', {
   },
 })
 
-cli.command('update', {
-  description: 'Reinstall or update Polaris using the bundled installer.',
-  options: z.object({
-    version: z.string().optional(),
-  }),
-  output: z.union([z.string(), updateOutputSchema]),
-  async run(c) {
-    try {
-      const output = await runUpdateCommand({ version: c.options.version ?? null })
-      return formatCommandResult(c.formatExplicit, output, renderUpdateOutput(output))
-    } catch (error) {
-      return handleCliError(c, error)
-    }
-  },
-})
-
 export async function isDirectCliExecution(
   moduleUrl: string,
   entryArg: string | undefined,
@@ -423,6 +396,13 @@ export function resolveDefaultMcpCommand(
   }
 
   return 'polaris --mcp'
+}
+
+export function resolveCliVersion(
+  embeddedVersion: string | undefined = Binary.version,
+  packageVersion: string = packageJson.version,
+): string {
+  return embeddedVersion ?? packageVersion
 }
 
 function resolveInstalledPolarisBinary(entryArg: string | undefined): string | null {
@@ -626,33 +606,6 @@ async function runResetCommand(config: Config): Promise<ResetOutput> {
     }
   } finally {
     await guard.release()
-  }
-}
-
-async function runUpdateCommand(options: { version: string | null }): Promise<UpdateOutput> {
-  const runtimeDir = resolveCliRuntimeRoot()
-  const installScript = path.join(runtimeDir, 'install.sh')
-  const installDir = inferInstallDirFromRuntimeRoot(runtimeDir)
-
-  try {
-    await fs.access(installScript)
-  } catch {
-    throw invalidArgument(`installer not found at ${installScript}`)
-  }
-
-  const args = [installScript, '--runtime-dir', runtimeDir]
-  if (installDir) args.push('--install-dir', installDir)
-  if (options.version) args.push('--version', options.version)
-
-  await runInstallerScript('bash', args)
-
-  return {
-    command: 'update',
-    install_script: installScript,
-    runtime_dir: runtimeDir,
-    install_dir: installDir,
-    version: options.version,
-    status: 'updated',
   }
 }
 
@@ -890,18 +843,6 @@ function renderResetOutput(output: ResetOutput): string {
   return lines.join('\n')
 }
 
-function renderUpdateOutput(output: UpdateOutput): string {
-  const lines = [
-    'update',
-    `runtime: ${output.runtime_dir}`,
-    `installer: ${output.install_script}`,
-    `install dir: ${output.install_dir ?? 'default'}`,
-  ]
-  if (output.version) lines.push(`version: ${output.version}`)
-  lines.push('status: updated')
-  return lines.join('\n')
-}
-
 function formatCommandResult<T>(
   formatExplicit: boolean,
   jsonValue: T,
@@ -998,46 +939,4 @@ function compactOptional<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined),
   ) as T
-}
-
-function resolveCliRuntimeRoot(): string {
-  const moduleDir = path.dirname(fileURLToPath(import.meta.url))
-  return path.resolve(moduleDir, '../../../../..')
-}
-
-function inferInstallDirFromRuntimeRoot(runtimeDir: string): string | null {
-  const normalized = path.normalize(runtimeDir)
-  const suffixes = [
-    path.join('.polaris', 'lib', 'polaris'),
-    path.join('.tick', 'lib', 'polaris'),
-    path.join('lib', 'polaris'),
-  ]
-
-  if (suffixes.some((suffix) => normalized.endsWith(suffix))) {
-    return path.resolve(runtimeDir, '..', '..', 'bin')
-  }
-
-  return null
-}
-
-async function runInstallerScript(command: string, args: string[]): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ['inherit', 'pipe', 'pipe'],
-      env: process.env,
-    })
-
-    child.stdout.on('data', (chunk) => {
-      process.stderr.write(chunk)
-    })
-    child.stderr.on('data', (chunk) => {
-      process.stderr.write(chunk)
-    })
-
-    child.on('error', reject)
-    child.on('close', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`installer exited with status ${code ?? 'unknown'}`))
-    })
-  })
 }

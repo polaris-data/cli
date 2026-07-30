@@ -4,121 +4,26 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build and publish, for example v0.7.0
+        description: Release tag to build and publish, for example v0.8.2
         required: true
         type: string
 
-permissions:
-  contents: write
+concurrency:
+  group: binary-release
+  cancel-in-progress: false
 
 jobs:
-  prepare:
-    runs-on: ubuntu-24.04
-    outputs:
-      create_tag: ${{ steps.plan.outputs.create_tag }}
-      release_sha: ${{ steps.plan.outputs.release_sha }}
-      should_release: ${{ steps.plan.outputs.should_release }}
-      source_ref: ${{ steps.plan.outputs.source_ref }}
-      tag: ${{ steps.plan.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Determine release plan
-        id: plan
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          event_name="${GITHUB_EVENT_NAME}"
-          ref_type="${GITHUB_REF_TYPE:-}"
-          before_sha="${{ github.event.before }}"
-
-          should_release="false"
-          create_tag="false"
-          release_sha="${GITHUB_SHA}"
-          source_ref="${GITHUB_SHA}"
-          tag=""
-
-          read_cli_version() {
-            sed -n "s/^const version = '\(.*\)'$/\1/p" packages/cli/src/index.ts | head -n1
-          }
-
-          if [[ "${event_name}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
-            should_release="true"
-          elif [[ "${ref_type}" == "tag" ]]; then
-            tag="${GITHUB_REF_NAME}"
-            should_release="true"
-            source_ref="${tag}"
-          else
-            current_version="$(read_cli_version)"
-            previous_version=""
-
-            if [[ -z "${current_version}" ]]; then
-              echo "Could not determine CLI version from packages/cli/src/index.ts." >&2
-              exit 1
-            fi
-
-            if [[ -n "${before_sha}" && "${before_sha}" != "0000000000000000000000000000000000000000" ]]; then
-              previous_version="$(
-                git show "${before_sha}:packages/cli/src/index.ts" 2>/dev/null \
-                  | sed -n "s/^const version = '\(.*\)'$/\1/p" \
-                  | head -n1 || true
-              )"
-            fi
-
-            if [[ "${previous_version}" != "${current_version}" ]]; then
-              tag="v${current_version}"
-              should_release="true"
-              create_tag="true"
-            fi
-          fi
-
-          if [[ "${should_release}" == "true" ]]; then
-            if [[ -z "${tag}" ]]; then
-              echo "Release tag is empty." >&2
-              exit 1
-            fi
-
-            if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Release tag must match vMAJOR.MINOR.PATCH." >&2
-              exit 1
-            fi
-
-            if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-              existing_sha="$(git rev-list -n1 "${tag}")"
-
-              if [[ "${event_name}" == "workflow_dispatch" ]]; then
-                release_sha="${existing_sha}"
-                source_ref="${tag}"
-              elif [[ "${existing_sha}" != "${GITHUB_SHA}" ]]; then
-                echo "Tag ${tag} already exists at ${existing_sha}, not ${GITHUB_SHA}." >&2
-                exit 1
-              fi
-
-              create_tag="false"
-            fi
-          fi
-
-          echo "create_tag=${create_tag}" >>"${GITHUB_OUTPUT}"
-          echo "release_sha=${release_sha}" >>"${GITHUB_OUTPUT}"
-          echo "should_release=${should_release}" >>"${GITHUB_OUTPUT}"
-          echo "source_ref=${source_ref}" >>"${GITHUB_OUTPUT}"
-          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
-
   validate:
-    needs: prepare
-    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
     outputs:
+      create_tag: ${{ steps.meta.outputs.create_tag }}
+      release_sha: ${{ steps.meta.outputs.release_sha }}
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.source_ref }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -141,228 +46,104 @@ jobs:
       - name: Build workspace
         run: pnpm build:ts
 
-      - name: Validate CLI version matches tag
+      - name: Validate release metadata
         id: meta
         shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
 
-          version="$(node packages/cli/dist/cli/src/index.js --version)"
-          tag="${{ needs.prepare.outputs.tag }}"
+          root_version="$(node -p "require('./package.json').version")"
+          cli_version="$(node -p "require('./packages/cli/package.json').version")"
+          built_version="$(node packages/cli/dist/cli/src/index.js --version)"
 
-          if [[ -z "${version}" ]]; then
-            echo "Could not determine built CLI version." >&2
+          if [[ ! "${REQUESTED_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must match vMAJOR.MINOR.PATCH." >&2
             exit 1
           fi
 
-          if [[ "${tag}" != "v${version}" ]]; then
-            echo "Tag ${tag} does not match CLI version v${version}." >&2
+          if [[ "${root_version}" != "${cli_version}" || "${root_version}" != "${built_version}" ]]; then
+            echo "Root, CLI package, and built CLI versions must match." >&2
+            echo "Root package: ${root_version}" >&2
+            echo "CLI package: ${cli_version}" >&2
+            echo "Built CLI: ${built_version}" >&2
             exit 1
           fi
 
-          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
-          echo "version=${version}" >>"${GITHUB_OUTPUT}"
-
-  build:
-    needs:
-      - prepare
-      - validate
-    if: needs.prepare.outputs.should_release == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            archive_ext: tar.gz
-            node_name: node
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            archive_ext: tar.gz
-            node_name: node
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            archive_ext: tar.gz
-            node_name: node
-          - runner: macos-14
-            target: aarch64-apple-darwin
-            archive_ext: tar.gz
-            node_name: node
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.source_ref }}
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.12.0
-          run_install: false
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build workspace
-        run: pnpm build:ts
-
-      - name: Create portable app package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf deployed
-          pnpm --filter @polaris/cli --prod deploy deployed/cli
-
-      - name: Package runtime bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          tag="${{ needs.validate.outputs.tag }}"
-          target="${{ matrix.target }}"
-          archive_name="polaris-${tag}-${target}.${{ matrix.archive_ext }}"
-          package_root="$(mktemp -d)"
-          verify_root="$(mktemp -d)"
-          trap 'rm -rf "${package_root}" "${verify_root}"' EXIT
-
-          mkdir -p "${package_root}/polaris/app"
-          cp install.sh "${package_root}/polaris/install.sh"
-          cp "$(command -v node)" "${package_root}/polaris/${{ matrix.node_name }}"
-          chmod 0755 "${package_root}/polaris/install.sh" "${package_root}/polaris/${{ matrix.node_name }}"
-          # `pnpm deploy` produces a symlink-heavy tree that BSD `cp -R`
-          # can stage incorrectly on macOS runners.
-          tar -C deployed/cli -cf - . | tar -C "${package_root}/polaris/app" -xf -
-
-          cat >"${package_root}/polaris/polaris" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          exec "${SELF_DIR}/node" "${SELF_DIR}/app/dist/cli/src/index.js" "$@"
-          EOF
-          chmod 0755 "${package_root}/polaris/polaris"
-
-          mkdir -p dist
-          tar -czf "dist/${archive_name}" -C "${package_root}" polaris
-
-          tar -xzf "dist/${archive_name}" -C "${verify_root}"
-          bundled_node="${verify_root}/polaris/${{ matrix.node_name }}"
-          bundled_entrypoint="${verify_root}/polaris/app/dist/cli/src/index.js"
-          expected_version="${{ needs.validate.outputs.version }}"
-          system_node_output_file="${verify_root}/system-node-output.txt"
-          bundled_node_output_file="${verify_root}/bundled-node-output.txt"
-          bundled_cli_output_file="${verify_root}/bundled-cli-output.txt"
-
-          if ! node "${bundled_entrypoint}" --version >"${system_node_output_file}" 2>&1; then
-            system_node_version="$(cat "${system_node_output_file}")"
-            echo "Extracted app tree failed before the bundled runtime was used." >&2
-            echo "Expected CLI version: ${expected_version}" >&2
-            echo "System-node CLI output:" >&2
-            printf '%s\n' "${system_node_version}" >&2
-            exit 1
-          fi
-          system_node_version="$(cat "${system_node_output_file}")"
-          if [[ "${system_node_version}" != "${expected_version}" ]]; then
-            echo "Extracted app tree is not runnable with the runner Node runtime." >&2
-            echo "Expected CLI version: ${expected_version}" >&2
-            echo "Actual system-node CLI version output: ${system_node_version}" >&2
+          if [[ "${REQUESTED_TAG}" != "v${root_version}" ]]; then
+            echo "Tag ${REQUESTED_TAG} does not match Polaris version v${root_version}." >&2
             exit 1
           fi
 
-          if ! "${bundled_node}" --version >"${bundled_node_output_file}" 2>&1; then
-            bundled_node_version="$(cat "${bundled_node_output_file}")"
-            echo "Bundled Node runtime failed to start." >&2
-            echo "Bundled node path: ${bundled_node}" >&2
-            echo "Bundled node output:" >&2
-            printf '%s\n' "${bundled_node_version}" >&2
-            if [[ "${RUNNER_OS}" == "macOS" ]]; then
-              file "${bundled_node}" >&2 || true
-              otool -L "${bundled_node}" >&2 || true
+          create_tag="true"
+          if git rev-parse -q --verify "refs/tags/${REQUESTED_TAG}" >/dev/null; then
+            existing_sha="$(git rev-list -n1 "${REQUESTED_TAG}")"
+            if [[ "${existing_sha}" != "${GITHUB_SHA}" ]]; then
+              echo "Tag ${REQUESTED_TAG} already exists at ${existing_sha}, not ${GITHUB_SHA}." >&2
+              exit 1
             fi
-            exit 1
-          fi
-          bundled_node_version="$(cat "${bundled_node_output_file}")"
-
-          if ! "${verify_root}/polaris/polaris" --version >"${bundled_cli_output_file}" 2>&1; then
-            bundled_cli_version="$(cat "${bundled_cli_output_file}")"
-            echo "Bundled Polaris launcher failed to print a version." >&2
-            echo "Expected CLI version: ${expected_version}" >&2
-            echo "Bundled node version output: ${bundled_node_version}" >&2
-            echo "Bundled launcher output:" >&2
-            printf '%s\n' "${bundled_cli_version}" >&2
-            exit 1
-          fi
-          bundled_cli_version="$(cat "${bundled_cli_output_file}")"
-
-          if [[ "${bundled_cli_version}" != "${expected_version}" ]]; then
-            echo "Bundled Polaris launcher reported an unexpected version string." >&2
-            echo "Expected CLI version: ${expected_version}" >&2
-            echo "Bundled node version output: ${bundled_node_version}" >&2
-            echo "Bundled launcher output:" >&2
-            printf '%s\n' "${bundled_cli_version}" >&2
-            exit 1
+            create_tag="false"
           fi
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.target }}
-          path: dist/polaris-${{ needs.validate.outputs.tag }}-${{ matrix.target }}.${{ matrix.archive_ext }}
-          if-no-files-found: error
+          echo "create_tag=${create_tag}" >>"${GITHUB_OUTPUT}"
+          echo "release_sha=${GITHUB_SHA}" >>"${GITHUB_OUTPUT}"
+          echo "tag=${REQUESTED_TAG}" >>"${GITHUB_OUTPUT}"
+          echo "version=${root_version}" >>"${GITHUB_OUTPUT}"
 
-  publish:
-    needs:
-      - prepare
-      - validate
-      - build
-    if: needs.prepare.outputs.should_release == 'true'
+  stage-release:
+    needs: validate
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: release-*
-          merge-multiple: true
-
       - name: Create release tag
-        if: needs.prepare.outputs.create_tag == 'true'
+        if: needs.validate.outputs.create_tag == 'true'
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            --method POST \
+            --field ref="refs/tags/${RELEASE_TAG}" \
+            --field sha="${RELEASE_SHA}"
 
-          payload="$(mktemp)"
-          trap 'rm -f "${payload}"' EXIT
-
-          cat >"${payload}" <<EOF
-          {
-            "ref": "refs/tags/${{ needs.validate.outputs.tag }}",
-            "sha": "${{ needs.prepare.outputs.release_sha }}"
-          }
-          EOF
-
-          curl --fail-with-body -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/git/refs" \
-            --data @"${payload}"
-
-      - name: Generate checksums
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd dist
-          shasum -a 256 polaris-${{ needs.validate.outputs.tag }}-*.tar.gz > polaris-${{ needs.validate.outputs.tag }}-checksums.txt
-
-      - name: Publish GitHub release
+      - name: Create draft GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate.outputs.tag }}
+          draft: true
           generate_release_notes: true
-          files: |
-            dist/polaris-${{ needs.validate.outputs.tag }}-*.tar.gz
-            dist/polaris-${{ needs.validate.outputs.tag }}-checksums.txt
+
+  binaries:
+    needs:
+      - validate
+      - stage-release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - id: release
+        uses: wevm/incur/release@v1
+        with:
+          entry: packages/cli/src/index.ts
+          name: polaris
+          release_tag: ${{ needs.validate.outputs.tag }}
+
+  publish:
+    needs:
+      - validate
+      - binaries
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: gh release edit "${RELEASE_TAG}" --draft=false --latest

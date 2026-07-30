@@ -1,9 +1,22 @@
 {
   "name": "polaris-monorepo",
+  "version": "0.8.2",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/polaris-data/cli"
+  },
   "packageManager": "pnpm@9.12.0",
   "engines": {
     "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "incur": "0.4.26"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "incur@0.4.26": "patches/incur@0.4.26.patch"
+    }
   },
   "scripts": {
     "build:ts": "pnpm -r build",

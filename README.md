@@ -24,17 +24,34 @@
 ### 1. Install Polaris
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash
+curl -fsSL https://github.com/polaris-data/cli/releases/latest/download/install.sh | sh
 ```
 
-The installer downloads the latest bundled release for your platform, so a local Node.js toolchain is not required for the normal install path.
-To install a specific tagged version instead, run:
+The installer downloads a verified standalone executable for macOS or Linux. It installs to
+`$HOME/.local/bin` by default and does not modify your shell profile. Set
+`POLARIS_INSTALL_DIR` or `INSTALL_DIR` to choose another destination.
+
+Windows users can install from PowerShell:
+
+```powershell
+irm https://github.com/polaris-data/cli/releases/latest/download/install.ps1 | iex
+```
+
+To install a specific tagged version, use that release's installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | bash -s -- --version v0.8.1
+curl -fsSL https://github.com/polaris-data/cli/releases/download/v0.8.2/install.sh | sh
 ```
 
-If no matching release asset is available for your platform, the installer falls back to building from source, which requires Node.js 22+.
+The standalone executable includes its runtime, so Node.js and Bun are not required.
+
+The repository bootstrap script remains available for compatibility and delegates to the
+generated installer for the selected release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/polaris-data/cli/main/install.sh | \
+  bash -s -- --version v0.8.2
+```
 
 ### 2. Optional: Set up your agent
 
@@ -108,7 +125,7 @@ Check whether Polaris sees a configured credential:
 polaris account
 ```
 
-### 7. Build from source
+### 8. Build from source
 
 ```bash
 pnpm install
@@ -131,8 +148,7 @@ polaris
 ├── mcp
 ├── download
 ├── reset
-├── skills
-└── update
+└── skills
 ```
 
 Top-level help:
@@ -237,15 +253,16 @@ polaris reset
 polaris reset --json
 ```
 
-### `polaris update`
+### `polaris --update`
 
-Reinstalls or updates Polaris by rerunning the bundled `install.sh` from the current runtime. By default it updates to the latest packaged release for your platform; use `--version` to pin a specific tag.
+Updates an Incur-built standalone executable to the highest compatible stable GitHub release.
+Polaris verifies the release asset's SHA-256 digest before replacing the current executable.
 
 ```bash
-polaris update
-polaris update --version v0.8.1
-polaris update --json
+polaris --update
 ```
+
+Package-manager and source installations do not enable binary self-updates.
 
 ## Configuration
 
@@ -289,7 +306,6 @@ Commands with `--json` support:
 - `polaris list`
 - `polaris download`
 - `polaris reset`
-- `polaris update`
 
 Examples:
 
@@ -298,7 +314,6 @@ polaris catalog --json
 polaris list --json
 polaris download --source aster --market BTCUSDT --from 2026-06-01T00:00:00Z --to 2026-06-02T00:00:00Z --json
 polaris reset --json
-polaris update --json
 ```
 
 ## Data Layout

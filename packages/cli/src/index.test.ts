@@ -5,7 +5,12 @@ import path from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 
-import { cli, isDirectCliExecution, resolveDefaultMcpCommand } from './index.js'
+import {
+  cli,
+  isDirectCliExecution,
+  resolveCliVersion,
+  resolveDefaultMcpCommand,
+} from './index.js'
 import { basicFixture, MockPolarisServer } from '../../core/test/support/mock-server.js'
 
 async function serve(argv: string[]) {
@@ -173,6 +178,17 @@ test('mcp registration falls back to node plus script entry for built sources', 
 test('mcp registration falls back to bare polaris command when no safe path is available', () => {
   assert.equal(resolveDefaultMcpCommand(undefined, '/usr/local/bin/node'), 'polaris --mcp')
   assert.equal(resolveDefaultMcpCommand('src/index.ts', '/usr/local/bin/node'), 'polaris --mcp')
+})
+
+test('CLI version prefers Incur embedded metadata and falls back to package metadata', () => {
+  assert.equal(resolveCliVersion('1.2.3', '0.8.2'), '1.2.3')
+  assert.equal(resolveCliVersion(undefined, '0.8.2'), '0.8.2')
+})
+
+test('legacy update subcommand is not advertised', async () => {
+  const result = await serve(['--help'])
+  assert.equal(result.exitCode, undefined)
+  assert.doesNotMatch(result.output, /^\s+update\b/m)
 })
 
 test('--llms-full includes Polaris docs references in the root skill output', async () => {
