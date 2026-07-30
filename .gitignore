@@ -4,3 +4,4 @@
 **/node_modules
 **/dist
 /incur*.tgz
+*.bun-build

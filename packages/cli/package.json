@@ -1,6 +1,6 @@
 {
   "name": "@polaris/cli",
-  "version": "0.0.0",
+  "version": "0.8.2",
   "private": true,
   "type": "module",
   "files": [
@@ -18,7 +18,7 @@
   "dependencies": {
     "@polaris/browser": "workspace:*",
     "@polaris/core": "workspace:*",
-    "incur": "^0.4.13",
+    "incur": "0.4.26",
     "zod": "^3.25.76"
   },
   "devDependencies": {
