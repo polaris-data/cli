@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Binary, Cli, z } from 'incur'
+import { Binary, Cli, Formatter, z } from 'incur'
 import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -30,6 +30,8 @@ import {
 } from '@polaris/core'
 
 const MIN_CLI_AUTH_POLL_INTERVAL_MS = 250
+const LATEST_RELEASE_URL = 'https://api.github.com/repos/polaris-data/cli/releases/latest'
+const UPDATE_CHECK_TIMEOUT_MS = 10_000
 
 const defaultMcpCommand = resolveDefaultMcpCommand()
 
@@ -405,6 +407,53 @@ export function resolveCliVersion(
   return embeddedVersion ?? packageVersion
 }
 
+export async function maybeHandleAlreadyCurrentUpdate(
+  argv: string[],
+  options: {
+    binaryTarget?: string | undefined
+    binaryVersion?: string | undefined
+    fetchLatest?: typeof globalThis.fetch | undefined
+    isTty?: boolean | undefined
+    stdout?: ((value: string) => void) | undefined
+  } = {},
+): Promise<boolean> {
+  if (!argv.includes('--update') || argv.includes('--help') || argv.includes('-h')) return false
+
+  const current = normalizeStableVersion(options.binaryVersion)
+  if (!current || !options.binaryTarget) return false
+
+  const outputFormat = resolveUpdateOutputFormat(argv)
+  if (!outputFormat.valid) return false
+
+  try {
+    const response = await (options.fetchLatest ?? globalThis.fetch)(LATEST_RELEASE_URL, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': 'polaris',
+        'x-github-api-version': '2022-11-28',
+      },
+      signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS),
+    })
+    if (!response.ok) return false
+
+    const metadata: unknown = await response.json()
+    if (!metadata || typeof metadata !== 'object') return false
+    const latest = normalizeStableVersion((metadata as Record<string, unknown>).tag_name)
+    if (latest !== current) return false
+  } catch {
+    return false
+  }
+
+  const result = { current, name: 'polaris', status: 'up_to_date' }
+  const human = (options.isTty ?? process.stdout.isTTY === true) && !outputFormat.explicit
+  const output = human
+    ? `✓ polaris is already up to date (${current})`
+    : Formatter.format(result, outputFormat.format)
+  const stdout = options.stdout ?? ((value: string) => process.stdout.write(value))
+  stdout(output.endsWith('\n') ? output : `${output}\n`)
+  return true
+}
+
 function resolveInstalledPolarisBinary(entryArg: string | undefined): string | null {
   if (!entryArg) return null
   const resolved = resolvePathForCommand(entryArg)
@@ -434,7 +483,47 @@ function quoteCommandArg(value: string): string {
 }
 
 if (await isDirectCliExecution(import.meta.url, process.argv[1])) {
-  await cli.serve(process.argv.slice(2))
+  const argv = process.argv.slice(2)
+  const handled = await maybeHandleAlreadyCurrentUpdate(argv, {
+    binaryTarget: Binary.target,
+    binaryVersion: Binary.version,
+  })
+  if (!handled) await cli.serve(argv)
+}
+
+function normalizeStableVersion(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const match = value.match(/^[vV]?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/)
+  if (!match) return undefined
+  return `${match[1]}.${match[2]}.${match[3]}`
+}
+
+function resolveUpdateOutputFormat(
+  argv: string[],
+):
+  | { explicit: boolean; format: Formatter.Format; valid: true }
+  | { valid: false } {
+  const formats = new Set<Formatter.Format>(['toon', 'json', 'yaml', 'md', 'jsonl'])
+  let explicit = false
+  let format: Formatter.Format = 'toon'
+
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index]
+    if (token === '--json') {
+      explicit = true
+      format = 'json'
+      continue
+    }
+    if (token !== '--format' || argv[index + 1] === undefined) continue
+
+    const candidate = argv[index + 1] as Formatter.Format
+    if (!formats.has(candidate)) return { valid: false }
+    explicit = true
+    format = candidate
+    index++
+  }
+
+  return { explicit, format, valid: true }
 }
 
 async function loadRuntimeConfig(): Promise<Config> {

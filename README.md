@@ -40,7 +40,7 @@ irm https://github.com/polaris-data/cli/releases/latest/download/install.ps1 | i
 To install a specific tagged version, use that release's installer:
 
 ```bash
-curl -fsSL https://github.com/polaris-data/cli/releases/download/v0.8.3/install.sh | sh
+curl -fsSL https://github.com/polaris-data/cli/releases/download/v0.8.4/install.sh | sh
 ```
 
 The standalone executable includes its runtime, so Node.js and Bun are not required.
@@ -255,6 +255,8 @@ polaris reset --json
 
 Updates an Incur-built standalone executable to the highest compatible stable GitHub release.
 Polaris verifies the release asset's SHA-256 digest before replacing the current executable.
+If the installed version is already the latest release, the command exits successfully without
+replacing the executable.
 
 ```bash
 polaris --update
