@@ -40,7 +40,7 @@ irm https://github.com/polaris-data/cli/releases/latest/download/install.ps1 | i
 To install a specific tagged version, use that release's installer:
 
 ```bash
-curl -fsSL https://github.com/polaris-data/cli/releases/download/v0.8.4/install.sh | sh
+curl -fsSL https://github.com/polaris-data/cli/releases/download/v0.8.5/install.sh | sh
 ```
 
 The standalone executable includes its runtime, so Node.js and Bun are not required.

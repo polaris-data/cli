@@ -1,6 +1,6 @@
 {
   "name": "polaris-monorepo",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "private": true,
   "repository": {
     "type": "git",
@@ -16,6 +16,7 @@
   "pnpm": {
     "patchedDependencies": {
       "incur@0.4.26": "patches/incur@0.4.26.patch",
+      "ink-picture@2.1.0": "patches/ink-picture@2.1.0.patch",
       "sixel@0.16.0": "patches/sixel@0.16.0.patch"
     }
   },

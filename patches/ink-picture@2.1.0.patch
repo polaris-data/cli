@@ -1,0 +1,25 @@
+diff --git a/build/utils/queryTerminal.js b/build/utils/queryTerminal.js
+--- a/build/utils/queryTerminal.js
++++ b/build/utils/queryTerminal.js
+@@ -29,5 +29,12 @@ const RESPONSE_PATTERNS_FOR_STRIPPING = [
+     /\x1b\[\?\d+(?:;\d+)*c/g,
+ ];
++export function decodeInputChunk(data) {
++    if (typeof data === "string")
++        return data;
++    if (ArrayBuffer.isView(data))
++        return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString();
++    return String(data);
++}
+ /**
+  * Detect terminal capabilities by sending a batch of escape sequence queries
+  * and accumulating the responses in a buffer matched by regex.
+@@ -158,7 +165,7 @@ export function queryTerminal(stdin, setRawMode, signal) {
+             }
+         };
+         stdin.push = (chunk) => {
+-            const str = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
++            const str = decodeInputChunk(chunk);
+             processChunk(str);
+             return true;
+         };
