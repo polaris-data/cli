@@ -85,6 +85,7 @@ export async function runPolarisBrowser(
         initialMarkets={markets}
       />
     </InkPictureProvider>,
+    { exitOnCtrlC: false },
   )
 
   await waitUntilExit()
@@ -316,6 +317,11 @@ function PolarisBrowser({
   }, [plan, downloading, layout, client, config, syncCachedPlan])
 
   useInput((input, key) => {
+    if (input === 'c' && key.ctrl) {
+      exit()
+      return
+    }
+
     if (downloading) return
 
     if (key.escape) {
