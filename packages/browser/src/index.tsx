@@ -522,14 +522,14 @@ function PolarisBrowser({
                   )}
                   {previewDateGroups.slice(previewDateViewportStart, previewDateViewportEnd).map((dg) => {
                     const completionBar = renderCompletionBar(dg.present, dg.total, 10)
-                    const completionCount = formatCompletionCount(dg.present, dg.total)
+                    const completionPercentage = formatCompletionPercentage(dg.present, dg.total)
                     return (
                       <Text
                         key={dg.date}
                         dimColor
                         wrap="truncate-end"
                       >
-                        {'  '}{dg.date} {completionCount} {completionBar}
+                        {'  '}{dg.date} {completionPercentage} {completionBar}
                       </Text>
                     )
                   })}
@@ -588,7 +588,7 @@ function PolarisBrowser({
                     : 0
                   const livePresent = Math.min(dg.total, dg.present + downloadedNow)
                   const completionBar = renderCompletionBar(livePresent, dg.total, 10)
-                  const completionCount = formatCompletionCount(livePresent, dg.total)
+                  const completionPercentage = formatCompletionPercentage(livePresent, dg.total)
                   return (
                     <Text
                       key={dg.date}
@@ -596,7 +596,7 @@ function PolarisBrowser({
                       bold={isSelected}
                       wrap="truncate-end"
                     >
-                      {isSelected ? '▶ ' : '  '}{dg.date} {completionCount} {completionBar}
+                      {isSelected ? '▶ ' : '  '}{dg.date} {completionPercentage} {completionBar}
                     </Text>
                   )
                 })}
@@ -720,8 +720,9 @@ function renderCompletionBar(present: number, total: number, barWidth: number): 
   return '█'.repeat(filled) + '░'.repeat(Math.max(0, barWidth - filled))
 }
 
-function formatCompletionCount(present: number, total: number): string {
-  return `${String(present).padStart(3, ' ')}/${String(total).padStart(3, ' ')}`
+function formatCompletionPercentage(present: number, total: number): string {
+  const percentage = total === 0 ? 0 : Math.round((present / total) * 100)
+  return `${String(percentage).padStart(3, ' ')}%`
 }
 
 function resolvePolarisIconPath(): string | null {

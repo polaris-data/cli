@@ -9,6 +9,7 @@ export interface SnapshotFixture {
   totalBytes: number
   files: Record<string, Uint8Array>
   failuresRemaining?: Record<string, number>
+  manifestFailure?: boolean
   marketAvailable?: boolean
 }
 
@@ -91,6 +92,9 @@ export class MockPolarisServer {
       const mode = url.searchParams.get('mode')
       if (source && market && date && mode === 'json') {
         this.state.batchDownloadCount += 1
+        if (this.fixture.manifestFailure) {
+          return this.error(res, 500, 'manifest unavailable')
+        }
         const snapshots = this.fixture.pages
           .flat()
           .filter((snapshot) => snapshot.key.includes(date))

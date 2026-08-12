@@ -139,6 +139,33 @@ test('catalog and snapshot pagination drive the sync plan', async () => {
   }
 })
 
+test('manifest failures do not fall back to single snapshot downloads', async () => {
+  const fixture = basicFixture()
+  fixture.manifestFailure = true
+  const server = new MockPolarisServer(fixture)
+  await server.start()
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'polaris-manifest-failure-'))
+  try {
+    const client = new PolarisClient(server.baseUrl(), undefined, 5_000)
+    const config = {
+      baseUrl: server.baseUrl(),
+      root: temp,
+      concurrency: 2,
+      timeoutMs: 5_000,
+    }
+    const plan = await buildSyncPlan(client, config, fixture.source, fixture.market, {
+      from: fixture.coverage.start,
+      to: fixture.coverage.end,
+    })
+
+    await assert.rejects(() => executeSync(client, plan, 2), /download manifest request failed/)
+    assert.equal(server.state.batchDownloadCount, 1)
+    assert.equal(server.state.keyDownloadCount, 0)
+  } finally {
+    await server.close()
+  }
+})
+
 test('incomplete temp files classify as incomplete', async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'polaris-classify-'))
   const layout = new Layout(temp)
