@@ -29,6 +29,10 @@ jobs:
         with:
           node-version: 22
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
       - uses: pnpm/action-setup@v4
         with:
           version: 9.12.0
@@ -45,6 +49,20 @@ jobs:
 
       - name: Build workspace
         run: pnpm build:ts
+
+      - name: Validate standalone bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bun build packages/cli/src/index.ts \
+            --compile \
+            --reject-unresolved \
+            --outfile="${RUNNER_TEMP}/polaris-standalone" \
+            --metafile="${RUNNER_TEMP}/polaris-metafile.json"
+          jq -e \
+            'any(.inputs | keys[]; endswith("packages/browser/src/index.tsx"))' \
+            "${RUNNER_TEMP}/polaris-metafile.json" >/dev/null
 
       - name: Validate release metadata
         id: meta

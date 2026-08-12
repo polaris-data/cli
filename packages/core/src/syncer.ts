@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { Layout } from './layout.js'
-import { lockHeld, otherError } from './errors.js'
+import { lockHeld, otherError, requestError } from './errors.js'
 import { inferDateFromText } from './layout.js'
 import { missingSnapshots } from './planner.js'
 import type { PolarisClient } from './api.js'
@@ -76,7 +76,7 @@ export async function executeSync(
 
 type DownloadTarget = {
   snapshot: SnapshotPlan
-  directUrl?: string
+  directUrl: string
 }
 
 async function downloadWithRetry(
@@ -114,9 +114,7 @@ async function downloadOnce(
   await fs.mkdir(path.dirname(snapshot.tempPath), { recursive: true })
 
   await fs.rm(snapshot.tempPath, { force: true })
-  const response = target.directUrl
-    ? await client.downloadFromUrl(target.directUrl, snapshot.key)
-    : await client.downloadSnapshot(snapshot.key)
+  const response = await client.downloadFromUrl(target.directUrl, snapshot.key)
   const totalBytesHeader = response.headers.get('content-length')
   const totalBytes = totalBytesHeader ? Number.parseInt(totalBytesHeader, 10) : undefined
   onProgress?.(
@@ -161,32 +159,30 @@ async function resolveDownloadTargets(
   plan: SyncPlan,
 ): Promise<DownloadTarget[]> {
   const snapshots = missingSnapshots(plan)
-  const byDate = new Map<string, SnapshotPlan[]>()
+  const dates = new Set<string>()
   for (const snapshot of snapshots) {
     const date = inferDateFromText(snapshot.key)
-    if (!date) continue
-    const group = byDate.get(date)
-    if (group) group.push(snapshot)
-    else byDate.set(date, [snapshot])
+    if (!date) {
+      throw requestError(undefined, `could not resolve download date from snapshot key ${snapshot.key}`)
+    }
+    dates.add(date)
   }
 
   const directUrls = new Map<string, string>()
   await Promise.all(
-    [...byDate.entries()].map(async ([date, daySnapshots]) => {
-      try {
-        const manifest = await client.downloadBatchManifest(plan.source, plan.market, date)
-        for (const snapshot of manifest.snapshots) {
-          directUrls.set(snapshot.key, snapshot.url)
-        }
-      } catch {
-        // Fall back to individual key resolution for this date.
-        for (const snapshot of daySnapshots) directUrls.delete(snapshot.key)
+    [...dates].map(async (date) => {
+      const manifest = await client.downloadBatchManifest(plan.source, plan.market, date)
+      for (const snapshot of manifest.snapshots) {
+        directUrls.set(snapshot.key, snapshot.url)
       }
     }),
   )
 
   return snapshots.map((snapshot) => {
     const directUrl = directUrls.get(snapshot.key)
-    return directUrl === undefined ? { snapshot } : { snapshot, directUrl }
+    if (!directUrl) {
+      throw requestError(undefined, `download manifest did not include snapshot ${snapshot.key}`)
+    }
+    return { snapshot, directUrl }
   })
 }

@@ -14,10 +14,6 @@ import type {
   SnapshotEntry,
 } from './types.js'
 
-interface DownloadResponse {
-  url: string
-}
-
 export class PolarisClient {
   readonly baseUrl: string
   private readonly sdk: SdkPolarisClient
@@ -190,16 +186,6 @@ export class PolarisClient {
         `download manifest request failed for ${source}/${market}/${date}`,
       )
     }
-  }
-
-  async downloadSnapshot(key: string): Promise<Response> {
-    let download: DownloadResponse
-    try {
-      download = await this.sdk.getSnapshotDownloadUrl({ key, mode: 'json' })
-    } catch (error) {
-      throw mapSdkError(error, 'download request failed')
-    }
-    return this.downloadFromUrl(download.url, key)
   }
 
   async downloadFromUrl(url: string, key: string): Promise<Response> {
