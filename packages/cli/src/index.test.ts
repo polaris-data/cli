@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url'
 import {
   cli,
   isDirectCliExecution,
+  maybeHandleAlreadyCurrentUpdate,
   resolveCliVersion,
   resolveDefaultMcpCommand,
 } from './index.js'
@@ -183,6 +184,90 @@ test('mcp registration falls back to bare polaris command when no safe path is a
 test('CLI version prefers Incur embedded metadata and falls back to package metadata', () => {
   assert.equal(resolveCliVersion('1.2.3', '0.8.3'), '1.2.3')
   assert.equal(resolveCliVersion(undefined, '0.8.3'), '0.8.3')
+})
+
+test('--update reports success when the standalone binary is already current', async () => {
+  let output = ''
+  let requestedUrl = ''
+  const handled = await maybeHandleAlreadyCurrentUpdate(['--update'], {
+    binaryTarget: 'darwin-arm64',
+    binaryVersion: '0.8.4',
+    fetchLatest: async (input) => {
+      requestedUrl = String(input)
+      return Response.json({ tag_name: 'v0.8.4' })
+    },
+    isTty: true,
+    stdout(value) {
+      output += value
+    },
+  })
+
+  assert.equal(handled, true)
+  assert.equal(requestedUrl, 'https://api.github.com/repos/polaris-data/cli/releases/latest')
+  assert.equal(output, '✓ polaris is already up to date (0.8.4)\n')
+})
+
+test('--update formats an already-current result for agents', async () => {
+  let output = ''
+  const handled = await maybeHandleAlreadyCurrentUpdate(['--update', '--format', 'json'], {
+    binaryTarget: 'darwin-arm64',
+    binaryVersion: '0.8.4',
+    fetchLatest: async () => Response.json({ tag_name: 'v0.8.4' }),
+    isTty: true,
+    stdout(value) {
+      output += value
+    },
+  })
+
+  assert.equal(handled, true)
+  assert.deepEqual(JSON.parse(output), {
+    current: '0.8.4',
+    name: 'polaris',
+    status: 'up_to_date',
+  })
+})
+
+test('--update delegates to Incur when another release is available', async () => {
+  let output = ''
+  const handled = await maybeHandleAlreadyCurrentUpdate(['--update'], {
+    binaryTarget: 'darwin-arm64',
+    binaryVersion: '0.8.4',
+    fetchLatest: async () => Response.json({ tag_name: 'v0.8.5' }),
+    isTty: true,
+    stdout(value) {
+      output += value
+    },
+  })
+
+  assert.equal(handled, false)
+  assert.equal(output, '')
+})
+
+test('--update delegates to Incur when the latest-release preflight fails', async () => {
+  const handled = await maybeHandleAlreadyCurrentUpdate(['--update'], {
+    binaryTarget: 'darwin-arm64',
+    binaryVersion: '0.8.4',
+    fetchLatest: async () => {
+      throw new Error('offline')
+    },
+  })
+
+  assert.equal(handled, false)
+})
+
+test('--help takes precedence over the already-current update preflight', async () => {
+  let requested = false
+  const handled = await maybeHandleAlreadyCurrentUpdate(['--help', '--update'], {
+    binaryTarget: 'darwin-arm64',
+    binaryVersion: '0.8.4',
+    fetchLatest: async () => {
+      requested = true
+      return Response.json({ tag_name: 'v0.8.4' })
+    },
+  })
+
+  assert.equal(handled, false)
+  assert.equal(requested, false)
 })
 
 test('legacy update subcommand is not advertised', async () => {
