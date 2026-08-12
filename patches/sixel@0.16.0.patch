@@ -1,0 +1,7 @@
+diff --git a/upng.js b/upng.js
+index 2949c7d..37b9e96 100644
+--- a/upng.js
++++ b/upng.js
+@@ -7 +7 @@
+-module.exports = UPNG = {};
++var UPNG = module.exports = {};

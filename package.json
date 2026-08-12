@@ -15,7 +15,8 @@
   },
   "pnpm": {
     "patchedDependencies": {
-      "incur@0.4.26": "patches/incur@0.4.26.patch"
+      "incur@0.4.26": "patches/incur@0.4.26.patch",
+      "sixel@0.16.0": "patches/sixel@0.16.0.patch"
     }
   },
   "scripts": {

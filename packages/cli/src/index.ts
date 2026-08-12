@@ -136,13 +136,7 @@ export const cli = Cli.create('polaris', {
     const config = await loadRuntimeConfig()
     const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs)
     if (canRenderBrowser(c.formatExplicit)) {
-      const spec: string = '@polaris/browser'
-      const { runPolarisBrowser } = (await import(spec)) as {
-        runPolarisBrowser: (
-          client: PolarisClient,
-          seed?: { source?: string; market?: string; search?: string },
-        ) => Promise<number>
-      }
+      const { runPolarisBrowser } = await import('@polaris/browser')
       await runPolarisBrowser(client, {})
       return
     }
