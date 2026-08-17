@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -107,6 +109,31 @@ test('sync lock can be reacquired after release', async () => {
   const second = await acquireSyncLock(layout)
   await second.release()
 })
+
+test('stale lock files owned by a dead process are removed and reacquired', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'polaris-lock-'))
+  const layout = new Layout(temp)
+  await fs.mkdir(path.dirname(layout.lockPath()), { recursive: true })
+  await fs.writeFile(layout.lockPath(), String(await spawnDeadProcess()), 'utf8')
+
+  const guard = await acquireSyncLock(layout)
+  await guard.release()
+})
+
+test('lock files owned by a live process are not removed', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'polaris-lock-'))
+  const layout = new Layout(temp)
+  await fs.mkdir(path.dirname(layout.lockPath()), { recursive: true })
+  await fs.writeFile(layout.lockPath(), String(process.pid), 'utf8')
+
+  await assert.rejects(() => acquireSyncLock(layout))
+})
+
+async function spawnDeadProcess(): Promise<number> {
+  const child = spawn(process.execPath, ['-e', ''])
+  await once(child, 'exit')
+  return child.pid ?? 0
+}
 
 test('catalog and snapshot pagination drive the sync plan', async () => {
   const fixture = basicFixture()

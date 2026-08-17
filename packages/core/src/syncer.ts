@@ -29,13 +29,72 @@ export async function acquireSyncLock(layout: Layout): Promise<SyncLockGuard> {
 
   activeLocks.add(lockPath)
   try {
-    const handle = await fs.open(lockPath, 'wx+')
+    const handle = await openLockFile(lockPath)
     return new SyncLockGuard(lockPath, handle)
   } catch (error) {
     activeLocks.delete(lockPath)
+    throw error
+  }
+}
+
+async function openLockFile(lockPath: string): Promise<fs.FileHandle> {
+  try {
+    return await createLockFile(lockPath)
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException
+    if (err.code !== 'EEXIST') throw otherError(`failed to open ${lockPath}`, error)
+  }
+
+  if (!(await removeStaleLock(lockPath))) throw lockHeld(lockPath)
+
+  try {
+    return await createLockFile(lockPath)
+  } catch (error) {
     const err = error as NodeJS.ErrnoException
     if (err.code === 'EEXIST') throw lockHeld(lockPath)
     throw otherError(`failed to open ${lockPath}`, error)
+  }
+}
+
+async function createLockFile(lockPath: string): Promise<fs.FileHandle> {
+  const handle = await fs.open(lockPath, 'wx+')
+  try {
+    await handle.writeFile(String(process.pid), 'utf8')
+    return handle
+  } catch (error) {
+    await handle.close()
+    throw error
+  }
+}
+
+async function removeStaleLock(lockPath: string): Promise<boolean> {
+  const pid = await readLockPid(lockPath)
+  if (pid !== undefined && isProcessAlive(pid)) return false
+
+  try {
+    await fs.rm(lockPath, { force: true })
+  } catch {
+    // The lock may have been released concurrently; let the caller retry.
+  }
+  return true
+}
+
+async function readLockPid(lockPath: string): Promise<number | undefined> {
+  try {
+    const pid = Number.parseInt((await fs.readFile(lockPath, 'utf8')).trim(), 10)
+    return Number.isFinite(pid) ? pid : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
 }
 

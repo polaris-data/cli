@@ -10,7 +10,6 @@ import {
   KeychainCredentialStore,
   Layout,
   PolarisClient,
-  PolarisError,
   acquireSyncLock,
   buildSyncPlan,
   executeSync,
@@ -264,17 +263,7 @@ function PolarisBrowser({
     setProgress({ done: 0, total: dateGroup.missing, failed: 0 })
     setStatus(`Downloading ${dateGroup.date}...`)
     try {
-      let guard
-      try {
-        guard = await acquireSyncLock(layout)
-      } catch (error) {
-        if (error instanceof PolarisError && error.kind === 'lock_held' && error.path) {
-          await fs.rm(error.path, { force: true })
-          guard = await acquireSyncLock(layout)
-        } else {
-          throw error
-        }
-      }
+      const guard = await acquireSyncLock(layout)
       try {
         const datePlan: SyncPlan = {
           ...plan,
