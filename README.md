@@ -226,6 +226,7 @@ polaris list --json
 Downloads missing snapshots for the requested dataset and time range. Existing complete local files are reused and not downloaded again.
 
 After download completes, the fetched snapshots are stored under `data/` within the configured local root.
+
 ```bash
 polaris download \
   --source aster \
@@ -268,13 +269,13 @@ Package-manager and source installations do not enable binary self-updates.
 
 ### Environment variables
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `POLARIS_BASE_URL` | `https://api.polaris.supply` | Base URL for Polaris API requests |
-| `POLARIS_API_KEY` | unset | Optional bearer token for authenticated Polaris requests |
-| `POLARIS_ROOT` | platform app-data directory | Override the local dataset root directory |
-| `POLARIS_CONCURRENCY` | unset | Default download concurrency when `--concurrency` is not provided |
-| `POLARIS_TIMEOUT_SECS` | unset | Request timeout in seconds |
+| Variable               | Default                      | Purpose                                                           |
+| ---------------------- | ---------------------------- | ----------------------------------------------------------------- |
+| `POLARIS_BASE_URL`     | `https://api.polaris.supply` | Base URL for Polaris API requests                                 |
+| `POLARIS_API_KEY`      | unset                        | Optional bearer token for authenticated Polaris requests          |
+| `POLARIS_ROOT`         | platform app-data directory  | Override the local dataset root directory                         |
+| `POLARIS_CONCURRENCY`  | unset                        | Default download concurrency when `--concurrency` is not provided |
+| `POLARIS_TIMEOUT_SECS` | unset                        | Request timeout in seconds                                        |
 
 `POLARIS_API_KEY` takes precedence over the stored credential saved by `polaris login` or `polaris key`.
 

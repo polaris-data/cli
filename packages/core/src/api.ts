@@ -1,9 +1,6 @@
-import {
-  PolarisClient as SdkPolarisClient,
-  PolarisError as SdkPolarisError,
-} from 'polaris-data'
+import { PolarisClient as SdkPolarisClient, PolarisError as SdkPolarisError } from 'polaris-data';
 
-import { invalidArgument, otherError, requestError } from './errors.js'
+import { invalidArgument, otherError, requestError } from './errors.js';
 import type {
   AccountResponse,
   CatalogResponse,
@@ -12,11 +9,11 @@ import type {
   DatasetAccessStatus,
   FeedbackResponse,
   SnapshotEntry,
-} from './types.js'
+} from './types.js';
 
 export class PolarisClient {
-  readonly baseUrl: string
-  private readonly sdk: SdkPolarisClient
+  readonly baseUrl: string;
+  private readonly sdk: SdkPolarisClient;
 
   constructor(
     baseUrl: string,
@@ -25,18 +22,18 @@ export class PolarisClient {
     readonly apiFetch: typeof fetch = fetch,
     readonly downloadFetch: typeof fetch = fetch,
   ) {
-    this.baseUrl = baseUrl.trim().replace(/\/+$/, '')
+    this.baseUrl = baseUrl.trim().replace(/\/+$/, '');
     const options: ConstructorParameters<typeof SdkPolarisClient>[0] = {
       baseUrl: this.baseUrl,
       timeout: timeoutMs,
       fetch: apiFetch,
-    }
-    if (apiKey) options.apiKey = apiKey
-    this.sdk = new SdkPolarisClient(options)
+    };
+    if (apiKey) options.apiKey = apiKey;
+    this.sdk = new SdkPolarisClient(options);
   }
 
   hasApiKey(): boolean {
-    return Boolean(this.apiKey)
+    return Boolean(this.apiKey);
   }
 
   async startCliAuth(): Promise<CliAuthStartResponse> {
@@ -46,14 +43,14 @@ export class PolarisClient {
         redirect: 'manual',
         signal: AbortSignal.timeout(this.timeoutMs),
       }).catch((error) => {
-        throw otherError('CLI auth start request failed', error)
+        throw otherError('CLI auth start request failed', error);
       }),
       'CLI auth start request failed',
-    )
+    );
   }
 
   async fetchAccount(): Promise<AccountResponse> {
-    return this.sendJson<AccountResponse>(`${this.baseUrl}/account`, {}, 'account request failed')
+    return this.sendJson<AccountResponse>(`${this.baseUrl}/account`, {}, 'account request failed');
   }
 
   async submitFeedback(message: string): Promise<FeedbackResponse> {
@@ -65,43 +62,43 @@ export class PolarisClient {
         body: JSON.stringify({ message }),
       },
       'feedback request failed',
-    )
+    );
   }
 
   async pollCliAuth(requestId: string, pollToken: string): Promise<CliAuthPollResponse> {
-    const url = new URL(`${this.baseUrl}/auth/cli/poll`)
-    url.searchParams.set('request_id', requestId)
-    url.searchParams.set('poll_token', pollToken)
+    const url = new URL(`${this.baseUrl}/auth/cli/poll`);
+    url.searchParams.set('request_id', requestId);
+    url.searchParams.set('poll_token', pollToken);
     const response = await this.apiFetch(url, {
       redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     }).catch((error) => {
-      throw otherError('CLI auth poll request failed', error)
-    })
-    const body = await response.text()
+      throw otherError('CLI auth poll request failed', error);
+    });
+    const body = await response.text();
     if (!(response.ok || response.status === 410)) {
-      throw httpError(response.status, body, 'CLI auth poll request failed')
+      throw httpError(response.status, body, 'CLI auth poll request failed');
     }
     try {
-      return JSON.parse(body) as CliAuthPollResponse
+      return JSON.parse(body) as CliAuthPollResponse;
     } catch (error) {
       throw otherError(
         `CLI auth poll request failed: failed to decode JSON response: ${bodySnippet(body)}`,
         error,
-      )
+      );
     }
   }
 
   async fetchCatalog(source?: string, market?: string): Promise<CatalogResponse> {
     if (market && !source) {
-      throw invalidArgument('--market on remote list requires --source')
+      throw invalidArgument('--market on remote list requires --source');
     }
 
     try {
-      const catalogOptions: { source?: string; market?: string } = {}
-      if (source) catalogOptions.source = source
-      if (market) catalogOptions.market = market
-      const catalog = await this.sdk.catalog(catalogOptions)
+      const catalogOptions: { source?: string; market?: string } = {};
+      if (source) catalogOptions.source = source;
+      if (market) catalogOptions.market = market;
+      const catalog = await this.sdk.catalog(catalogOptions);
       return {
         markets: catalog.markets.map((entry) => ({
           source: entry.source,
@@ -118,9 +115,9 @@ export class PolarisClient {
             : undefined,
         })),
         updated_at: catalog.updatedAt,
-      }
+      };
     } catch (error) {
-      throw mapSdkError(error, 'catalog request failed')
+      throw mapSdkError(error, 'catalog request failed');
     }
   }
 
@@ -136,12 +133,12 @@ export class PolarisClient {
         market,
         from,
         to,
-      })
+      });
       return {
         snapshots: entries.map((entry) => ({ key: entry.key, date: entry.date })),
-      }
+      };
     } catch (error) {
-      throw mapSdkError(error, 'snapshot listing failed')
+      throw mapSdkError(error, 'snapshot listing failed');
     }
   }
 
@@ -150,21 +147,21 @@ export class PolarisClient {
     market: string,
     date: string,
   ): Promise<{
-    source: string
-    market: string
-    date: string
-    total: number
-    totalBytes: number
+    source: string;
+    market: string;
+    date: string;
+    total: number;
+    totalBytes: number;
     snapshots: Array<{
-      date: string
-      timestamp: string
-      key: string
-      url: string
-      expiresInSeconds?: number
-    }>
+      date: string;
+      timestamp: string;
+      key: string;
+      url: string;
+      expiresInSeconds?: number;
+    }>;
   }> {
     try {
-      const manifest = await this.sdk.getSnapshotDownloadUrls({ source, market, date })
+      const manifest = await this.sdk.getSnapshotDownloadUrls({ source, market, date });
       return {
         source: manifest.source,
         market: manifest.market,
@@ -178,12 +175,9 @@ export class PolarisClient {
           url: snapshot.url,
           expiresInSeconds: snapshot.expires_in_seconds,
         })),
-      }
+      };
     } catch (error) {
-      throw mapSdkError(
-        error,
-        `download manifest request failed for ${source}/${market}/${date}`,
-      )
+      throw mapSdkError(error, `download manifest request failed for ${source}/${market}/${date}`);
     }
   }
 
@@ -191,32 +185,28 @@ export class PolarisClient {
     const fileResponse = await this.downloadFetch(url, {
       signal: AbortSignal.timeout(this.timeoutMs),
     }).catch((error) => {
-      throw otherError(`file download failed for ${key}`, error)
-    })
-    if (fileResponse.ok) return fileResponse
-    throw httpError(fileResponse.status, await fileResponse.text(), 'file download failed')
+      throw otherError(`file download failed for ${key}`, error);
+    });
+    if (fileResponse.ok) return fileResponse;
+    throw httpError(fileResponse.status, await fileResponse.text(), 'file download failed');
   }
 
-  private async sendJson<T>(
-    input: string | URL,
-    init: RequestInit,
-    context: string,
-  ): Promise<T> {
+  private async sendJson<T>(input: string | URL, init: RequestInit, context: string): Promise<T> {
     return this.decodeJsonResponse<T>(
       await this.authorizedFetch(input, init, this.apiFetch, context),
       context,
-    )
+    );
   }
 
   private async decodeJsonResponse<T>(response: Response, context: string): Promise<T> {
     if (!response.ok) {
-      throw httpError(response.status, await response.text(), context)
+      throw httpError(response.status, await response.text(), context);
     }
-    const body = await response.text()
+    const body = await response.text();
     try {
-      return JSON.parse(body) as T
+      return JSON.parse(body) as T;
     } catch (error) {
-      throw otherError(`${context}: failed to decode JSON response: ${bodySnippet(body)}`, error)
+      throw otherError(`${context}: failed to decode JSON response: ${bodySnippet(body)}`, error);
     }
   }
 
@@ -226,38 +216,38 @@ export class PolarisClient {
     client: typeof fetch,
     context: string,
   ): Promise<Response> {
-    const headers = new Headers(init.headers)
-    if (this.apiKey) headers.set('authorization', `Bearer ${this.apiKey}`)
+    const headers = new Headers(init.headers);
+    if (this.apiKey) headers.set('authorization', `Bearer ${this.apiKey}`);
     try {
       return await client(input, {
         ...init,
         headers,
         redirect: init.redirect ?? 'manual',
         signal: init.signal ?? AbortSignal.timeout(this.timeoutMs),
-      })
+      });
     } catch (error) {
-      throw otherError(context, error)
+      throw otherError(context, error);
     }
   }
 }
 
 function bodySnippet(body: string): string {
-  const trimmed = body.trim()
-  if (!trimmed) return '<empty body>'
-  return trimmed.length > 240 ? `${trimmed.slice(0, 240)}...` : trimmed
+  const trimmed = body.trim();
+  if (!trimmed) return '<empty body>';
+  return trimmed.length > 240 ? `${trimmed.slice(0, 240)}...` : trimmed;
 }
 
 function httpError(status: number, body: string, context: string) {
-  const message = body.trim() ? `${context} (${status}): ${body.trim()}` : `${context} (${status})`
-  return requestError(status, message, status === 429 || status >= 500)
+  const message = body.trim() ? `${context} (${status}): ${body.trim()}` : `${context} (${status})`;
+  return requestError(status, message, status === 429 || status >= 500);
 }
 
 function mapSdkError(error: unknown, context: string) {
   if (error instanceof SdkPolarisError) {
-    const status = error.statusCode
-    const retryable = status === 429 || (status !== undefined && status >= 500)
-    return requestError(status, `${context}: ${error.message}`, retryable)
+    const status = error.statusCode;
+    const retryable = status === 429 || (status !== undefined && status >= 500);
+    return requestError(status, `${context}: ${error.message}`, retryable);
   }
-  if (error instanceof Error) return otherError(context, error)
-  return otherError(context, new Error(String(error)))
+  if (error instanceof Error) return otherError(context, error);
+  return otherError(context, new Error(String(error)));
 }

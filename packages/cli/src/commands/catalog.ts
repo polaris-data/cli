@@ -1,17 +1,20 @@
-import { invalidArgument } from '@polaris/core'
-import type { CatalogMarket, Config, PolarisClient } from '@polaris/core'
+import { invalidArgument } from '@polaris/core';
+import type { CatalogMarket, Config, PolarisClient } from '@polaris/core';
 
-import type { RemoteDatasetEntry, RemoteListOutput } from '../schemas.js'
-import { accessSummary, matchesExact } from '../render/helpers.js'
+import type { RemoteDatasetEntry, RemoteListOutput } from '../schemas.js';
+import { accessSummary, matchesExact } from '../render/helpers.js';
 
 export async function runCatalogCommand(
   config: Config,
   client: PolarisClient,
   filters: { source: string | null; market: string | null; search: string | null; limit: number },
 ): Promise<{ output: RemoteListOutput }> {
-  if (filters.limit <= 0) throw invalidArgument('--limit must be greater than zero')
-  const catalog = await client.fetchCatalog(filters.source ?? undefined, filters.market ?? undefined)
-  const datasets = filterRemoteCatalog(catalog.markets, filters, filters.limit)
+  if (filters.limit <= 0) throw invalidArgument('--limit must be greater than zero');
+  const catalog = await client.fetchCatalog(
+    filters.source ?? undefined,
+    filters.market ?? undefined,
+  );
+  const datasets = filterRemoteCatalog(catalog.markets, filters, filters.limit);
   return {
     output: {
       command: 'catalog',
@@ -19,7 +22,7 @@ export async function runCatalogCommand(
       dataset_total: datasets.length,
       datasets,
     },
-  }
+  };
 }
 
 function filterRemoteCatalog(
@@ -36,9 +39,9 @@ function filterRemoteCatalog(
       (left, right) =>
         accessSortOrder(left.access) - accessSortOrder(right.access) ||
         left.dataset.localeCompare(right.dataset),
-    )
+    );
 
-  return datasets.slice(0, limit)
+  return datasets.slice(0, limit);
 }
 
 function toRemoteDatasetEntry(market: CatalogMarket): RemoteDatasetEntry {
@@ -55,14 +58,14 @@ function toRemoteDatasetEntry(market: CatalogMarket): RemoteDatasetEntry {
         }
       : null,
     dataset: `${market.source}:${market.market}`,
-  }
-  if (market.categories.length > 0) entry.categories = market.categories
-  return entry
+  };
+  if (market.categories.length > 0) entry.categories = market.categories;
+  return entry;
 }
 
 function matchesSearch(entry: RemoteDatasetEntry, search: string | null): boolean {
-  const normalized = search?.trim().toLowerCase()
-  if (!normalized) return true
+  const normalized = search?.trim().toLowerCase();
+  if (!normalized) return true;
   const haystack = [
     entry.dataset,
     entry.catalog_source ?? '',
@@ -70,18 +73,18 @@ function matchesSearch(entry: RemoteDatasetEntry, search: string | null): boolea
     accessSummary(entry.access),
   ]
     .join(' ')
-    .toLowerCase()
-  return normalized.split(/\s+/).every((token) => haystack.includes(token))
+    .toLowerCase();
+  return normalized.split(/\s+/).every((token) => haystack.includes(token));
 }
 
 function accessSortOrder(access: RemoteDatasetEntry['access']): number {
-  if (!access) return Number.MAX_SAFE_INTEGER
+  if (!access) return Number.MAX_SAFE_INTEGER;
   switch (access.status) {
     case 'open':
-      return 0
+      return 0;
     case 'preview':
-      return 1
+      return 1;
     case 'restricted':
-      return 2
+      return 2;
   }
 }

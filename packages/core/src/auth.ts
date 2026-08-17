@@ -1,39 +1,39 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
-import { invalidArgument, otherError } from './errors.js'
-import { dataLocalDir } from './platform.js'
-import { trimValue } from './util.js'
+import { invalidArgument, otherError } from './errors.js';
+import { dataLocalDir } from './platform.js';
+import { trimValue } from './util.js';
 
-const PRIMARY_SERVICE_NAME = 'polaris'
-const LEGACY_SERVICE_NAME = 'tick'
-const ACCOUNT_NAME = 'polaris-api-key'
-const PRIMARY_APP_NAME = 'polaris'
-const LEGACY_APP_NAME = 'tick'
+const PRIMARY_SERVICE_NAME = 'polaris';
+const LEGACY_SERVICE_NAME = 'tick';
+const ACCOUNT_NAME = 'polaris-api-key';
+const PRIMARY_APP_NAME = 'polaris';
+const LEGACY_APP_NAME = 'tick';
 
 type KeytarModule = {
-  getPassword(service: string, account: string): Promise<string | null>
-  setPassword(service: string, account: string, password: string): Promise<void>
-}
+  getPassword(service: string, account: string): Promise<string | null>;
+  setPassword(service: string, account: string, password: string): Promise<void>;
+};
 
-type KeytarLoader = () => Promise<KeytarModule>
+type KeytarLoader = () => Promise<KeytarModule>;
 
-let keytarPromise: Promise<KeytarModule> | undefined
+let keytarPromise: Promise<KeytarModule> | undefined;
 
 export interface CredentialStore {
-  getApiKey(): Promise<string | undefined>
-  setApiKey(apiKey: string): Promise<void>
+  getApiKey(): Promise<string | undefined>;
+  setApiKey(apiKey: string): Promise<void>;
 }
 
 export class KeychainCredentialStore implements CredentialStore {
   constructor(private readonly keytarLoader: KeytarLoader = loadKeytar) {}
 
   async getApiKey(): Promise<string | undefined> {
-    let readError: Error | undefined
-    let keytar: KeytarModule | undefined
+    let readError: Error | undefined;
+    let keytar: KeytarModule | undefined;
 
     try {
-      keytar = await this.keytarLoader()
+      keytar = await this.keytarLoader();
     } catch {
       // Standalone cross-target builds may not be able to load keytar's native addon.
       // Continue to the file-backed credential stores in that case.
@@ -42,93 +42,93 @@ export class KeychainCredentialStore implements CredentialStore {
     if (keytar) {
       for (const service of [PRIMARY_SERVICE_NAME, LEGACY_SERVICE_NAME]) {
         try {
-          const value = trimValue(await keytar.getPassword(service, ACCOUNT_NAME))
-          if (value) return value
+          const value = trimValue(await keytar.getPassword(service, ACCOUNT_NAME));
+          if (value) return value;
         } catch (error) {
           readError ??= otherError(
             `failed to read Polaris API key from OS credential store: ${String(error)}`,
             error,
-          )
+          );
         }
       }
     }
 
     for (const appName of [PRIMARY_APP_NAME, LEGACY_APP_NAME]) {
-      const value = await readFallbackApiKey(appName)
-      if (value) return value
+      const value = await readFallbackApiKey(appName);
+      if (value) return value;
     }
 
-    if (readError) throw readError
-    return undefined
+    if (readError) throw readError;
+    return undefined;
   }
 
   async setApiKey(apiKey: string): Promise<void> {
-    const trimmed = apiKey.trim()
-    if (!trimmed) throw invalidArgument('API key cannot be empty')
+    const trimmed = apiKey.trim();
+    if (!trimmed) throw invalidArgument('API key cannot be empty');
 
-    let keychainError: unknown
+    let keychainError: unknown;
     try {
-      const keytar = await this.keytarLoader()
-      await keytar.setPassword(PRIMARY_SERVICE_NAME, ACCOUNT_NAME, trimmed)
+      const keytar = await this.keytarLoader();
+      await keytar.setPassword(PRIMARY_SERVICE_NAME, ACCOUNT_NAME, trimmed);
       try {
-        await keytar.setPassword(LEGACY_SERVICE_NAME, ACCOUNT_NAME, trimmed)
+        await keytar.setPassword(LEGACY_SERVICE_NAME, ACCOUNT_NAME, trimmed);
       } catch {
         // Best effort legacy backfill.
       }
-      const stored = trimValue(await keytar.getPassword(PRIMARY_SERVICE_NAME, ACCOUNT_NAME))
+      const stored = trimValue(await keytar.getPassword(PRIMARY_SERVICE_NAME, ACCOUNT_NAME));
       if (stored !== trimmed) {
         keychainError = new Error(
           'stored Polaris API key could not be read back from OS credential store',
-        )
+        );
       }
     } catch (error) {
-      keychainError = error
+      keychainError = error;
     }
 
     try {
-      await writeFallbackApiKey(PRIMARY_APP_NAME, trimmed)
+      await writeFallbackApiKey(PRIMARY_APP_NAME, trimmed);
     } catch (primaryError) {
       try {
-        await writeFallbackApiKey(LEGACY_APP_NAME, trimmed)
+        await writeFallbackApiKey(LEGACY_APP_NAME, trimmed);
       } catch (legacyError) {
         throw otherError(
           `failed to persist Polaris API key in fallback file stores: ${String(primaryError)}; ${String(legacyError)}`,
-        )
+        );
       }
     }
 
     if (keychainError) {
       // File-backed storage is already written above, so preserve Rust semantics.
-      console.warn(`falling back to file-backed Polaris API key storage: ${String(keychainError)}`)
+      console.warn(`falling back to file-backed Polaris API key storage: ${String(keychainError)}`);
     }
   }
 }
 
 export function credentialFallbackPath(appName: string): string {
-  return path.join(dataLocalDir(appName), 'account', 'api-key.txt')
+  return path.join(dataLocalDir(appName), 'account', 'api-key.txt');
 }
 
 export async function readFallbackApiKey(appName: string): Promise<string | undefined> {
-  const filePath = credentialFallbackPath(appName)
+  const filePath = credentialFallbackPath(appName);
   try {
-    return trimValue(await fs.readFile(filePath, 'utf8'))
+    return trimValue(await fs.readFile(filePath, 'utf8'));
   } catch (error) {
-    const err = error as NodeJS.ErrnoException
-    if (err.code === 'ENOENT') return undefined
-    throw otherError(`failed to read fallback credential file ${filePath}`, error)
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') return undefined;
+    throw otherError(`failed to read fallback credential file ${filePath}`, error);
   }
 }
 
 export async function writeFallbackApiKey(appName: string, apiKey: string): Promise<void> {
-  const filePath = credentialFallbackPath(appName)
-  await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, `${apiKey}\n`, { mode: 0o600 })
+  const filePath = credentialFallbackPath(appName);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${apiKey}\n`, { mode: 0o600 });
 }
 
 async function loadKeytar(): Promise<KeytarModule> {
   keytarPromise ??= import('keytar').then((module) => {
-    const keytar = (module as { default?: KeytarModule }).default ?? (module as KeytarModule)
-    return keytar
-  })
-  return keytarPromise
+    const keytar = (module as { default?: KeytarModule }).default ?? (module as KeytarModule);
+    return keytar;
+  });
+  return keytarPromise;
 }
