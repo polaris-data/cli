@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 
 import { invalidArgument } from './errors.js'
 import type { LocalSnapshotEntry } from './types.js'
+import { compactOptional } from './util.js'
 
 export class Layout {
   constructor(readonly root: string) {}
@@ -124,7 +125,7 @@ async function collectSnapshotFiles(
   }
 }
 
-export function inferLocalMetadata(
+function inferLocalMetadata(
   relativePath: string,
 ): [string | undefined, string | undefined, string | undefined] {
   const filename = relativePath.split('/').at(-1)
@@ -143,10 +144,4 @@ export function inferLocalMetadata(
     return [segments[1], segments[2], segments[3]]
   }
   return [undefined, undefined, undefined]
-}
-
-function compactOptional<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined),
-  ) as T
 }

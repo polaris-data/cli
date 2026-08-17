@@ -7,6 +7,7 @@ import { inferDateFromText } from './layout.js'
 import { missingSnapshots } from './planner.js'
 import type { PolarisClient } from './api.js'
 import type { FailedDownload, SnapshotPlan, SyncExecution, SyncPlan, SyncProgressEvent } from './types.js'
+import { delay } from './util.js'
 
 const RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000]
 const activeLocks = new Set<string>()
@@ -19,10 +20,6 @@ export class SyncLockGuard {
     await this.handle.close()
     await fs.rm(this.path, { force: true })
   }
-}
-
-export function layoutForRoot(root: string): Layout {
-  return new Layout(root)
 }
 
 export async function acquireSyncLock(layout: Layout): Promise<SyncLockGuard> {
@@ -148,10 +145,6 @@ async function downloadOnce(
   await fs.rm(snapshot.localPath, { force: true })
   await fs.rename(snapshot.tempPath, snapshot.localPath)
   return downloadedBytes
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 async function resolveDownloadTargets(

@@ -144,7 +144,3 @@ export type SyncProgressEvent =
   | { type: 'progress'; key: string; downloadedBytes: number; totalBytes?: number | undefined }
   | { type: 'downloaded'; key: string; totalBytes: number }
   | { type: 'failed'; key: string; error: string }
-
-export interface BookmarkStore {
-  bookmarks: string[]
-}

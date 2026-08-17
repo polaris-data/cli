@@ -4,6 +4,7 @@ import { datasetUnavailable } from './errors.js'
 import { Layout } from './layout.js'
 import type { PolarisClient } from './api.js'
 import type { Config, SnapshotPlan, SyncPlan, TimeWindow } from './types.js'
+import { pathExists } from './util.js'
 
 export function intersectRanges(
   requested: TimeWindow,
@@ -100,15 +101,6 @@ export function presentTotal(plan: SyncPlan): number {
 
 export function missingSnapshots(plan: SyncPlan): SnapshotPlan[] {
   return plan.snapshots.filter((snapshot) => snapshot.state !== 'present')
-}
-
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await fs.access(target)
-    return true
-  } catch {
-    return false
-  }
 }
 
 async function statOrUndefined(target: string) {

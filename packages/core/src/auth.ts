@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { invalidArgument, otherError } from './errors.js'
 import { dataLocalDir } from './platform.js'
+import { trimValue } from './util.js'
 
 const PRIMARY_SERVICE_NAME = 'polaris'
 const LEGACY_SERVICE_NAME = 'tick'
@@ -122,11 +123,6 @@ export async function writeFallbackApiKey(appName: string, apiKey: string): Prom
   const filePath = credentialFallbackPath(appName)
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   await fs.writeFile(filePath, `${apiKey}\n`, { mode: 0o600 })
-}
-
-function trimValue(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim()
-  return trimmed ? trimmed : undefined
 }
 
 async function loadKeytar(): Promise<KeytarModule> {

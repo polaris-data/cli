@@ -15,10 +15,8 @@ import {
   buildSyncPlan,
   executeSync,
   inferDateFromText,
-  loadAccountIdentity,
   loadConfig,
   openUrl,
-  parseOpaqueKey,
   type Config,
   type SyncPlan,
   type SnapshotPlan,
@@ -71,7 +69,6 @@ export async function runPolarisBrowser(
   const store = new KeychainCredentialStore()
   const config = await loadConfig((key) => process.env[key], store)
   const layout = new Layout(config.root)
-  const account = await loadAccountIdentity(config.root)
   const markets = await loadDatasets(client, seed)
 
   const { waitUntilExit } = render(
@@ -81,7 +78,6 @@ export async function runPolarisBrowser(
         config={config}
         layout={layout}
         seed={seed}
-        initialAccount={account}
         initialMarkets={markets}
       />
     </InkPictureProvider>,
@@ -97,7 +93,6 @@ interface PolarisBrowserProps {
   config: Config
   layout: Layout
   seed: BrowserSeed
-  initialAccount: any
   initialMarkets: BrowserDataset[]
 }
 
@@ -106,7 +101,6 @@ function PolarisBrowser({
   config,
   layout,
   seed,
-  initialAccount,
   initialMarkets,
 }: PolarisBrowserProps) {
   const { exit } = useApp()
@@ -438,9 +432,7 @@ function PolarisBrowser({
     }
   })
 
-  const headerLines = 0
-  const searchLine = 1
-  const availableHeight = Math.max(rows - headerLines - searchLine, 3)
+  const availableHeight = Math.max(rows - 1, 3)
   const marketListHeight = Math.max(availableHeight - 1, 1)
   const columnGap = 8
 
@@ -624,22 +616,14 @@ function PolarisBrowser({
   )
 }
 
-function BrandLogo({
-  visibleWidth,
-  renderWidth = visibleWidth,
-  cropFromLeft = false,
-}: {
-  visibleWidth: number
-  renderWidth?: number
-  cropFromLeft?: boolean
-}) {
+function BrandLogo({ visibleWidth }: { visibleWidth: number }) {
   const viewportWidth = Math.max(1, visibleWidth)
-  const cellWidth = Math.max(8, Math.min(renderWidth, 18))
+  const cellWidth = Math.max(8, Math.min(visibleWidth, 18))
   const cellHeight = Math.max(4, Math.round(cellWidth / 2))
 
   if (POLARIS_ICON_PATH) {
     return (
-      <Box width={viewportWidth} justifyContent={cropFromLeft ? 'flex-end' : 'flex-start'}>
+      <Box width={viewportWidth} justifyContent="flex-start">
         <Image
           src={POLARIS_ICON_PATH}
           width={cellWidth}
@@ -657,7 +641,7 @@ function BrandLogo({
     <>
       {POLARIS_ICON_ASCII.map((line, index) => (
         <Text key={index} bold wrap="truncate-end">
-          {cropFromLeft ? line.slice(-fallbackWidth) : line.slice(0, fallbackWidth)}
+          {line.slice(0, fallbackWidth)}
         </Text>
       ))}
     </>

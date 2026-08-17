@@ -3,6 +3,7 @@ import { invalidArgument, otherError } from './errors.js'
 import { dataLocalDir } from './platform.js'
 import type { ApiKeySource, Config } from './types.js'
 import type { CredentialStore } from './auth.js'
+import { compactOptional, trimValue } from './util.js'
 
 export const DEFAULT_BASE_URL = 'https://api.polaris.supply'
 export const DEFAULT_CONCURRENCY = 16
@@ -79,11 +80,6 @@ function preferredEnv(
   return reader(primary) ?? reader(legacy)
 }
 
-function trimValue(value: string | undefined): string | undefined {
-  const trimmed = value?.trim()
-  return trimmed ? trimmed : undefined
-}
-
 function parsePositiveNumber(raw: string | undefined, fallback: number, name: string): number {
   if (!raw) return fallback
   const parsed = Number.parseInt(raw.trim(), 10)
@@ -94,10 +90,4 @@ function parsePositiveNumber(raw: string | undefined, fallback: number, name: st
     throw invalidArgument(`${name} must be greater than zero`)
   }
   return parsed
-}
-
-function compactOptional<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined),
-  ) as T
 }

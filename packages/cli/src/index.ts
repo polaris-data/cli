@@ -12,9 +12,12 @@ import {
   KeychainCredentialStore,
   Layout,
   PolarisClient,
+  PolarisError,
   acquireSyncLock,
   buildSyncPlan,
   clearBookmarks,
+  compactOptional,
+  delay,
   executeSync,
   invalidArgument,
   loadConfig,
@@ -51,7 +54,6 @@ const remoteDatasetSchema = z
     categories: z.array(z.string()).optional(),
     dataset: z.string(),
   })
-  .transform((value) => value)
 
 const remoteListOutputSchema = z.object({
   command: z.literal('catalog'),
@@ -723,7 +725,7 @@ async function runLoginCommand(config: Config): Promise<{
   while (true) {
     const poll = await client.pollCliAuth(start.request_id, start.poll_token)
     if (poll.status === 'pending') {
-      await sleep(Math.max(poll.interval_ms, MIN_CLI_AUTH_POLL_INTERVAL_MS))
+      await delay(Math.max(poll.interval_ms, MIN_CLI_AUTH_POLL_INTERVAL_MS))
       continue
     }
     if (poll.status === 'approved') {
@@ -959,15 +961,12 @@ function handleCliError(
   },
   error: unknown,
 ): never {
-  if (error instanceof Error && 'kind' in error && 'exitCode' in error) {
-    const exitCode = (error as { exitCode: () => number }).exitCode()
-    const kind = String((error as { kind: string }).kind).toUpperCase()
-    const retryable = Boolean((error as { retryable?: boolean }).retryable)
+  if (error instanceof PolarisError) {
     return c.error({
-      code: kind,
+      code: error.kind.toUpperCase(),
       message: error.message,
-      retryable,
-      exitCode,
+      retryable: error.retryable,
+      exitCode: error.exitCode(),
     })
   }
   return c.error({
@@ -1012,14 +1011,4 @@ async function promptPassword(prompt: string): Promise<string> {
     mutable._writeToOutput = original
     rl.close()
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function compactOptional<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined),
-  ) as T
 }

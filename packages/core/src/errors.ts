@@ -34,8 +34,6 @@ export class PolarisError extends Error {
   }
 }
 
-export type Result<T> = Promise<T> | T
-
 export function datasetUnavailable(message: string): PolarisError {
   return new PolarisError('dataset_unavailable', message)
 }
@@ -60,8 +58,4 @@ export function requestError(
 
 export function otherError(message: string, cause?: unknown): PolarisError {
   return new PolarisError('other', message, { cause })
-}
-
-export function ensure(condition: unknown, error: PolarisError): asserts condition {
-  if (!condition) throw error
 }

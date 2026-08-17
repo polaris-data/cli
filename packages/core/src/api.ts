@@ -129,7 +129,7 @@ export class PolarisClient {
     market: string,
     from: Date,
     to: Date,
-  ): Promise<{ snapshots: SnapshotEntry[]; totalRemoteBytes: number }> {
+  ): Promise<{ snapshots: SnapshotEntry[] }> {
     try {
       const entries = await this.sdk.listSnapshots({
         source,
@@ -139,7 +139,6 @@ export class PolarisClient {
       })
       return {
         snapshots: entries.map((entry) => ({ key: entry.key, date: entry.date })),
-        totalRemoteBytes: 0,
       }
     } catch (error) {
       throw mapSdkError(error, 'snapshot listing failed')
@@ -242,13 +241,13 @@ export class PolarisClient {
   }
 }
 
-export function bodySnippet(body: string): string {
+function bodySnippet(body: string): string {
   const trimmed = body.trim()
   if (!trimmed) return '<empty body>'
   return trimmed.length > 240 ? `${trimmed.slice(0, 240)}...` : trimmed
 }
 
-export function httpError(status: number, body: string, context: string) {
+function httpError(status: number, body: string, context: string) {
   const message = body.trim() ? `${context} (${status}): ${body.trim()}` : `${context} (${status})`
   return requestError(status, message, status === 429 || status >= 500)
 }
