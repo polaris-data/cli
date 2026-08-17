@@ -1,119 +1,51 @@
 #!/usr/bin/env node
-import { Binary, Cli, Formatter, z } from 'incur'
-import fsSync from 'node:fs'
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import { createInterface } from 'node:readline/promises'
-import process from 'node:process'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { Binary, Cli, Formatter, z } from 'incur';
+import fsSync from 'node:fs';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createInterface } from 'node:readline/promises';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
-import packageJson from '../package.json' with { type: 'json' }
+import packageJson from '../package.json' with { type: 'json' };
 import {
   KeychainCredentialStore,
-  Layout,
   PolarisClient,
-  acquireSyncLock,
-  buildSyncPlan,
-  clearBookmarks,
-  executeSync,
+  PolarisError,
+  compactOptional,
   invalidArgument,
   loadConfig,
-  openUrl,
-  parseRfc3339,
-  presentTotal,
-  remoteTotal,
-  type CatalogMarket,
+  otherError,
   type Config,
-  type LocalSnapshotEntry,
-  type SyncExecution,
-  type SyncPlan,
-} from '@polaris/core'
+} from '@polaris/core';
 
-const MIN_CLI_AUTH_POLL_INTERVAL_MS = 250
-const LATEST_RELEASE_URL = 'https://api.github.com/repos/polaris-data/cli/releases/latest'
-const UPDATE_CHECK_TIMEOUT_MS = 10_000
+import {
+  accountOutputSchema,
+  localListOutputSchema,
+  loginOutputSchema,
+  remoteListOutputSchema,
+  resetOutputSchema,
+  syncOutputSchema,
+} from './schemas.js';
+import { runAccountCommand } from './commands/account.js';
+import { runCatalogCommand } from './commands/catalog.js';
+import { runDownloadCommand } from './commands/download.js';
+import { runListCommand } from './commands/list.js';
+import { runLoginCommand } from './commands/login.js';
+import { runResetCommand } from './commands/reset.js';
+import {
+  formatCommandResult,
+  renderLocalListOutput,
+  renderRemoteListOutput,
+  renderResetOutput,
+  renderSyncOutput,
+} from './render/index.js';
 
-const defaultMcpCommand = resolveDefaultMcpCommand()
+const LATEST_RELEASE_URL = 'https://api.github.com/repos/polaris-data/cli/releases/latest';
+const UPDATE_CHECK_TIMEOUT_MS = 10_000;
 
-const remoteDatasetSchema = z
-  .object({
-    source: z.string(),
-    market: z.string(),
-    start: z.string(),
-    end: z.string(),
-    catalog_source: z.string().nullable(),
-    access: z
-      .object({
-        status: z.enum(['open', 'preview', 'restricted']),
-        public_cutoff_date: z.string().nullable(),
-      })
-      .nullable(),
-    categories: z.array(z.string()).optional(),
-    dataset: z.string(),
-  })
-  .transform((value) => value)
+const defaultMcpCommand = resolveDefaultMcpCommand();
 
-const remoteListOutputSchema = z.object({
-  command: z.literal('catalog'),
-  filters: z.object({
-    source: z.string().nullable(),
-    market: z.string().nullable(),
-    search: z.string().nullable(),
-  }),
-  dataset_total: z.number(),
-  datasets: z.array(remoteDatasetSchema),
-})
-
-const localSnapshotSchema = z.object({
-  key: z.string(),
-  path: z.string(),
-  filename: z.string(),
-  source: z.string().nullable(),
-  market: z.string().nullable(),
-  date: z.string().nullable(),
-  start: z.null(),
-  end: z.null(),
-})
-
-const localListOutputSchema = z.object({
-  command: z.literal('list'),
-  root: z.string(),
-  filters: z.object({
-    source: z.string().nullable(),
-    market: z.string().nullable(),
-    date: z.string().nullable(),
-  }),
-  snapshot_total: z.number(),
-  snapshots: z.array(localSnapshotSchema),
-})
-
-const syncOutputSchema = z.object({
-  command: z.literal('download'),
-  source: z.string(),
-  market: z.string(),
-  requested_range: z.object({ from: z.string(), to: z.string() }),
-  effective_range: z.object({ from: z.string(), to: z.string() }),
-  root: z.string(),
-  remote_total: z.number(),
-  downloaded_total: z.number(),
-  skipped_total: z.number(),
-  failed_total: z.number(),
-  downloaded_keys: z.array(z.string()),
-  failed: z.array(z.object({ key: z.string(), error: z.string() })),
-})
-
-const resetOutputSchema = z.object({
-  command: z.literal('reset'),
-  root: z.string(),
-  snapshot_total: z.number(),
-  removed_roots: z.array(z.string()),
-})
-
-type RemoteDatasetEntry = z.infer<typeof remoteDatasetSchema>
-type RemoteListOutput = z.infer<typeof remoteListOutputSchema>
-type LocalListOutput = z.infer<typeof localListOutputSchema>
-type SyncOutput = z.infer<typeof syncOutputSchema>
-type ResetOutput = z.infer<typeof resetOutputSchema>
 export const cli = Cli.create('polaris', {
   version: resolveCliVersion(),
   update: Binary.github({ repository: 'polaris-data/cli' }),
@@ -133,37 +65,41 @@ export const cli = Cli.create('polaris', {
     depth: 0,
   },
   async run(c) {
-    const config = await loadRuntimeConfig()
-    const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs)
+    const config = await loadRuntimeConfig();
+    const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs);
     if (canRenderBrowser(c.formatExplicit)) {
-      const { runPolarisBrowser } = await import('@polaris/browser')
-      await runPolarisBrowser(client, {})
-      return
+      const { runPolarisBrowser } = await import('@polaris/browser');
+      await runPolarisBrowser(client, {});
+      return;
     }
     const result = await runCatalogCommand(config, client, {
       source: null,
       market: null,
       search: null,
       limit: Number.MAX_SAFE_INTEGER,
-    })
-    return formatCommandResult(c.formatExplicit, result.output, renderRemoteListOutput(result.output))
+    });
+    return formatCommandResult(
+      c.formatExplicit,
+      result.output,
+      renderRemoteListOutput(result.output),
+    );
   },
-})
+});
 
 cli.command('account', {
   description: 'Print the current Polaris auth state and account details.',
-  output: z.union([z.string(), z.any()]),
+  output: z.union([z.string(), accountOutputSchema]),
   async run(c) {
     try {
-      const config = await loadRuntimeConfig()
-      const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs)
-      const result = await runAccountCommand(config, client)
-      return formatCommandResult(c.formatExplicit, result.json, result.human)
+      const config = await loadRuntimeConfig();
+      const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs);
+      const result = await runAccountCommand(config, client);
+      return formatCommandResult(c.formatExplicit, result.json, result.human);
     } catch (error) {
-      return handleCliError(c, error)
+      return handleCliError(c, error);
     }
   },
-})
+});
 
 cli.command('catalog', {
   description: 'List remote datasets available from Polaris.',
@@ -176,14 +112,14 @@ cli.command('catalog', {
   output: z.union([z.string(), remoteListOutputSchema]),
   async run(c) {
     try {
-      const config = await loadRuntimeConfig()
-      const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs)
+      const config = await loadRuntimeConfig();
+      const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs);
       const result = await runCatalogCommand(config, client, {
         source: c.options.source ?? null,
         market: c.options.market ?? null,
         search: c.options.search ?? null,
         limit: c.options.limit,
-      })
+      });
       const cta = result.output.datasets[0]
         ? {
             commands: [
@@ -199,18 +135,18 @@ cli.command('catalog', {
               },
             ],
           }
-        : undefined
+        : undefined;
       return formatCommandResult(
         c.formatExplicit,
         result.output,
         renderRemoteListOutput(result.output),
         cta ? { cta } : undefined,
-      )
+      );
     } catch (error) {
-      return handleCliError(c, error)
+      return handleCliError(c, error);
     }
   },
-})
+});
 
 cli.command('feedback', {
   description: 'Send product feedback to the Polaris team.',
@@ -220,54 +156,45 @@ cli.command('feedback', {
   output: z.union([z.string(), z.object({ ok: z.literal(true) })]),
   async run(c) {
     try {
-      const message = c.args.message.trim()
-      if (!message) throw invalidArgument('feedback message cannot be empty')
-      const config = await loadRuntimeConfig()
-      const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs)
-      const response = await client.submitFeedback(message)
-      if (!response.ok) throw new Error('feedback request failed: API returned ok=false')
-      return formatCommandResult(c.formatExplicit, { ok: true as const }, 'Feedback sent.')
+      const message = c.args.message.trim();
+      if (!message) throw invalidArgument('feedback message cannot be empty');
+      const config = await loadRuntimeConfig();
+      const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs);
+      const response = await client.submitFeedback(message);
+      if (!response.ok) throw otherError('feedback request failed: API returned ok=false');
+      return formatCommandResult(c.formatExplicit, { ok: true as const }, 'Feedback sent.');
     } catch (error) {
-      return handleCliError(c, error)
+      return handleCliError(c, error);
     }
   },
-})
+});
 
 cli.command('key', {
   description: 'Store a Polaris API key from a secure prompt.',
   output: z.union([z.string(), z.object({ stored: z.literal(true) })]),
   async run(c) {
     try {
-      const apiKey = await promptPassword('Polaris API key: ')
-      const store = new KeychainCredentialStore()
-      await store.setApiKey(apiKey)
+      const apiKey = await promptPassword('Polaris API key: ');
+      const store = new KeychainCredentialStore();
+      await store.setApiKey(apiKey);
       return formatCommandResult(
         c.formatExplicit,
         { stored: true as const },
         'Stored Polaris API key in persistent credential storage.',
-      )
+      );
     } catch (error) {
-      return handleCliError(c, error)
+      return handleCliError(c, error);
     }
   },
-})
+});
 
 cli.command('login', {
   description: 'Sign in through the browser and store the returned API key.',
-  output: z.union([
-    z.string(),
-    z.object({
-      status: z.literal('signed_in'),
-      user_id: z.string(),
-      display_name: z.string().nullable(),
-      email: z.string().nullable(),
-      plan: z.string().nullable(),
-    }),
-  ]),
+  output: z.union([z.string(), loginOutputSchema]),
   async run(c) {
     try {
-      const config = await loadRuntimeConfig()
-      const result = await runLoginCommand(config)
+      const config = await loadRuntimeConfig();
+      const result = await runLoginCommand(config);
       return formatCommandResult(
         c.formatExplicit,
         result.json,
@@ -279,12 +206,12 @@ cli.command('login', {
               },
             }
           : undefined,
-      )
+      );
     } catch (error) {
-      return handleCliError(c, error)
+      return handleCliError(c, error);
     }
   },
-})
+});
 
 cli.command('list', {
   description: 'List local snapshots under the configured root.',
@@ -296,18 +223,18 @@ cli.command('list', {
   output: z.union([z.string(), localListOutputSchema]),
   async run(c) {
     try {
-      const config = await loadRuntimeConfig()
+      const config = await loadRuntimeConfig();
       const output = await runListCommand(config, {
         source: c.options.source ?? null,
         market: c.options.market ?? null,
         date: c.options.date ?? null,
-      })
-      return formatCommandResult(c.formatExplicit, output, renderLocalListOutput(output))
+      });
+      return formatCommandResult(c.formatExplicit, output, renderLocalListOutput(output));
     } catch (error) {
-      return handleCliError(c, error)
+      return handleCliError(c, error);
     }
   },
-})
+});
 
 cli.command('download', {
   description: 'Download missing snapshots for a dataset and time range.',
@@ -321,15 +248,19 @@ cli.command('download', {
   output: z.union([z.string(), syncOutputSchema]),
   async run(c) {
     try {
-      const config = await loadRuntimeConfig()
-      const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs)
-      const result = await runDownloadCommand(config, client, compactOptional({
-        source: c.options.source,
-        market: c.options.market,
-        from: c.options.from,
-        to: c.options.to,
-        concurrency: c.options.concurrency,
-      }))
+      const config = await loadRuntimeConfig();
+      const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs);
+      const result = await runDownloadCommand(
+        config,
+        client,
+        compactOptional({
+          source: c.options.source,
+          market: c.options.market,
+          from: c.options.from,
+          to: c.options.to,
+          concurrency: c.options.concurrency,
+        }),
+      );
       return formatCommandResult(
         c.formatExplicit,
         result.output,
@@ -341,41 +272,41 @@ cli.command('download', {
                 commands: [{ command: 'catalog', description: 'Inspect dataset coverage again.' }],
               },
             },
-      )
+      );
     } catch (error) {
-      return handleCliError(c, error)
+      return handleCliError(c, error);
     }
   },
-})
+});
 
 cli.command('reset', {
   description: 'Remove all local dataset state managed by Polaris.',
   output: z.union([z.string(), resetOutputSchema]),
   async run(c) {
     try {
-      const config = await loadRuntimeConfig()
-      const output = await runResetCommand(config)
-      return formatCommandResult(c.formatExplicit, output, renderResetOutput(output))
+      const config = await loadRuntimeConfig();
+      const output = await runResetCommand(config);
+      return formatCommandResult(c.formatExplicit, output, renderResetOutput(output));
     } catch (error) {
-      return handleCliError(c, error)
+      return handleCliError(c, error);
     }
   },
-})
+});
 
 export async function isDirectCliExecution(
   moduleUrl: string,
   entryArg: string | undefined,
 ): Promise<boolean> {
-  if (!entryArg) return false
+  if (!entryArg) return false;
 
   try {
     const [modulePath, entryPath] = await Promise.all([
       fs.realpath(fileURLToPath(moduleUrl)),
       fs.realpath(entryArg),
-    ])
-    return modulePath === entryPath
+    ]);
+    return modulePath === entryPath;
   } catch {
-    return path.resolve(fileURLToPath(moduleUrl)) === path.resolve(entryArg)
+    return path.resolve(fileURLToPath(moduleUrl)) === path.resolve(entryArg);
   }
 }
 
@@ -383,41 +314,41 @@ export function resolveDefaultMcpCommand(
   entryArg: string | undefined = process.argv[1],
   runtimePath: string | undefined = process.execPath,
 ): string {
-  const installedBinary = resolveInstalledPolarisBinary(entryArg)
-  if (installedBinary) return `${quoteCommandArg(installedBinary)} --mcp`
+  const installedBinary = resolveInstalledPolarisBinary(entryArg);
+  if (installedBinary) return `${quoteCommandArg(installedBinary)} --mcp`;
 
-  const nodeScript = resolveNodeScriptEntry(entryArg)
+  const nodeScript = resolveNodeScriptEntry(entryArg);
   if (nodeScript && runtimePath) {
-    return `${quoteCommandArg(runtimePath)} ${quoteCommandArg(nodeScript)} --mcp`
+    return `${quoteCommandArg(runtimePath)} ${quoteCommandArg(nodeScript)} --mcp`;
   }
 
-  return 'polaris --mcp'
+  return 'polaris --mcp';
 }
 
 export function resolveCliVersion(
   embeddedVersion: string | undefined = Binary.version,
   packageVersion: string = packageJson.version,
 ): string {
-  return embeddedVersion ?? packageVersion
+  return embeddedVersion ?? packageVersion;
 }
 
 export async function maybeHandleAlreadyCurrentUpdate(
   argv: string[],
   options: {
-    binaryTarget?: string | undefined
-    binaryVersion?: string | undefined
-    fetchLatest?: typeof globalThis.fetch | undefined
-    isTty?: boolean | undefined
-    stdout?: ((value: string) => void) | undefined
+    binaryTarget?: string | undefined;
+    binaryVersion?: string | undefined;
+    fetchLatest?: typeof globalThis.fetch | undefined;
+    isTty?: boolean | undefined;
+    stdout?: ((value: string) => void) | undefined;
   } = {},
 ): Promise<boolean> {
-  if (!argv.includes('--update') || argv.includes('--help') || argv.includes('-h')) return false
+  if (!argv.includes('--update') || argv.includes('--help') || argv.includes('-h')) return false;
 
-  const current = normalizeStableVersion(options.binaryVersion)
-  if (!current || !options.binaryTarget) return false
+  const current = normalizeStableVersion(options.binaryVersion);
+  if (!current || !options.binaryTarget) return false;
 
-  const outputFormat = resolveUpdateOutputFormat(argv)
-  if (!outputFormat.valid) return false
+  const outputFormat = resolveUpdateOutputFormat(argv);
+  if (!outputFormat.valid) return false;
 
   try {
     const response = await (options.fetchLatest ?? globalThis.fetch)(LATEST_RELEASE_URL, {
@@ -427,599 +358,156 @@ export async function maybeHandleAlreadyCurrentUpdate(
         'x-github-api-version': '2022-11-28',
       },
       signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS),
-    })
-    if (!response.ok) return false
+    });
+    if (!response.ok) return false;
 
-    const metadata: unknown = await response.json()
-    if (!metadata || typeof metadata !== 'object') return false
-    const latest = normalizeStableVersion((metadata as Record<string, unknown>).tag_name)
-    if (latest !== current) return false
+    const metadata: unknown = await response.json();
+    if (!metadata || typeof metadata !== 'object') return false;
+    const latest = normalizeStableVersion((metadata as Record<string, unknown>).tag_name);
+    if (latest !== current) return false;
   } catch {
-    return false
+    return false;
   }
 
-  const result = { current, name: 'polaris', status: 'up_to_date' }
-  const human = (options.isTty ?? process.stdout.isTTY === true) && !outputFormat.explicit
+  const result = { current, name: 'polaris', status: 'up_to_date' };
+  const human = (options.isTty ?? process.stdout.isTTY === true) && !outputFormat.explicit;
   const output = human
     ? `✓ polaris is already up to date (${current})`
-    : Formatter.format(result, outputFormat.format)
-  const stdout = options.stdout ?? ((value: string) => process.stdout.write(value))
-  stdout(output.endsWith('\n') ? output : `${output}\n`)
-  return true
+    : Formatter.format(result, outputFormat.format);
+  const stdout = options.stdout ?? ((value: string) => process.stdout.write(value));
+  stdout(output.endsWith('\n') ? output : `${output}\n`);
+  return true;
 }
 
 function resolveInstalledPolarisBinary(entryArg: string | undefined): string | null {
-  if (!entryArg) return null
-  const resolved = resolvePathForCommand(entryArg)
-  const normalized = path.basename(resolved).toLowerCase()
+  if (!entryArg) return null;
+  const resolved = resolvePathForCommand(entryArg);
+  const normalized = path.basename(resolved).toLowerCase();
   return normalized === 'polaris' || normalized === 'polaris.cmd' || normalized === 'polaris.ps1'
     ? resolved
-    : null
+    : null;
 }
 
 function resolveNodeScriptEntry(entryArg: string | undefined): string | null {
-  if (!entryArg) return null
-  const resolved = resolvePathForCommand(entryArg)
-  const extension = path.extname(resolved).toLowerCase()
-  return extension === '.js' || extension === '.mjs' || extension === '.cjs' ? resolved : null
+  if (!entryArg) return null;
+  const resolved = resolvePathForCommand(entryArg);
+  const extension = path.extname(resolved).toLowerCase();
+  return extension === '.js' || extension === '.mjs' || extension === '.cjs' ? resolved : null;
 }
 
 function resolvePathForCommand(filePath: string): string {
   try {
-    return fsSync.realpathSync(filePath)
+    return fsSync.realpathSync(filePath);
   } catch {
-    return path.resolve(filePath)
+    return path.resolve(filePath);
   }
 }
 
 function quoteCommandArg(value: string): string {
-  return /[\s"]/.test(value) ? JSON.stringify(value) : value
+  return /[\s"]/.test(value) ? JSON.stringify(value) : value;
 }
 
 if (await isDirectCliExecution(import.meta.url, process.argv[1])) {
-  const argv = process.argv.slice(2)
+  const argv = process.argv.slice(2);
   const handled = await maybeHandleAlreadyCurrentUpdate(argv, {
     binaryTarget: Binary.target,
     binaryVersion: Binary.version,
-  })
-  if (!handled) await cli.serve(argv)
+  });
+  if (!handled) await cli.serve(argv);
 }
 
 function normalizeStableVersion(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined
-  const match = value.match(/^[vV]?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/)
-  if (!match) return undefined
-  return `${match[1]}.${match[2]}.${match[3]}`
+  if (typeof value !== 'string') return undefined;
+  const match = value.match(/^[vV]?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+  if (!match) return undefined;
+  return `${match[1]}.${match[2]}.${match[3]}`;
 }
 
 function resolveUpdateOutputFormat(
   argv: string[],
-):
-  | { explicit: boolean; format: Formatter.Format; valid: true }
-  | { valid: false } {
-  const formats = new Set<Formatter.Format>(['toon', 'json', 'yaml', 'md', 'jsonl'])
-  let explicit = false
-  let format: Formatter.Format = 'toon'
+): { explicit: boolean; format: Formatter.Format; valid: true } | { valid: false } {
+  const formats = new Set<Formatter.Format>(['toon', 'json', 'yaml', 'md', 'jsonl']);
+  let explicit = false;
+  let format: Formatter.Format = 'toon';
 
   for (let index = 0; index < argv.length; index++) {
-    const token = argv[index]
+    const token = argv[index];
     if (token === '--json') {
-      explicit = true
-      format = 'json'
-      continue
+      explicit = true;
+      format = 'json';
+      continue;
     }
-    if (token !== '--format' || argv[index + 1] === undefined) continue
+    if (token !== '--format' || argv[index + 1] === undefined) continue;
 
-    const candidate = argv[index + 1] as Formatter.Format
-    if (!formats.has(candidate)) return { valid: false }
-    explicit = true
-    format = candidate
-    index++
+    const candidate = argv[index + 1] as Formatter.Format;
+    if (!formats.has(candidate)) return { valid: false };
+    explicit = true;
+    format = candidate;
+    index++;
   }
 
-  return { explicit, format, valid: true }
+  return { explicit, format, valid: true };
 }
 
 async function loadRuntimeConfig(): Promise<Config> {
-  return loadConfig((key) => process.env[key], new KeychainCredentialStore())
+  return loadConfig((key) => process.env[key], new KeychainCredentialStore());
 }
 
 function canRenderBrowser(formatExplicit: boolean): boolean {
-  return !formatExplicit && process.stdout.isTTY === true && process.stdin.isTTY === true
-}
-
-async function runAccountCommand(config: Config, client: PolarisClient): Promise<{
-  human: string
-  json?: {
-    base_url: string
-    auth: string
-    status: string
-    user_id: string | null
-    email: string | null
-    plan: string | null
-    provider: string | null
-    key_id: string | null
-  }
-}> {
-  const authSource =
-    config.apiKeySource === 'environment'
-      ? 'configured via POLARIS_API_KEY'
-      : config.apiKeySource === 'credential_store'
-        ? 'configured via stored credential'
-        : 'not configured'
-
-  if (!config.apiKey) {
-    return {
-      human: ['Polaris account', `Base URL: ${config.baseUrl}`, `Auth: ${authSource}`, 'Status: not signed in', 'Run `polaris login` to sign in.'].join('\n'),
-      json: {
-        base_url: config.baseUrl,
-        auth: authSource,
-        status: 'not signed in',
-        user_id: null,
-        email: null,
-        plan: null,
-        provider: null,
-        key_id: null,
-      },
-    }
-  }
-
-  const account = await client.fetchAccount()
-  const displayName = account.identity.display_name ?? account.identity.email ?? account.user_id
-  const lines = [
-    'Polaris account',
-    `Base URL: ${config.baseUrl}`,
-    `Auth: ${authSource}`,
-    `Status: signed in as ${displayName}`,
-    `User ID: ${account.user_id}`,
-  ]
-  if (account.identity.email) lines.push(`Email: ${account.identity.email}`)
-  lines.push(`Plan: ${account.subscription.tier}`)
-  lines.push(`Provider: ${account.auth.provider}`)
-  if (account.auth.key_id) lines.push(`Key ID: ${account.auth.key_id}`)
-
-  return {
-    human: lines.join('\n'),
-    json: {
-      base_url: config.baseUrl,
-      auth: authSource,
-      status: `signed in as ${displayName}`,
-      user_id: account.user_id,
-      email: account.identity.email ?? null,
-      plan: account.subscription.tier,
-      provider: account.auth.provider,
-      key_id: account.auth.key_id ?? null,
-    },
-  }
-}
-
-async function runCatalogCommand(
-  config: Config,
-  client: PolarisClient,
-  filters: { source: string | null; market: string | null; search: string | null; limit: number },
-): Promise<{ output: RemoteListOutput }> {
-  if (filters.limit <= 0) throw invalidArgument('--limit must be greater than zero')
-  const catalog = await client.fetchCatalog(filters.source ?? undefined, filters.market ?? undefined)
-  const datasets = filterRemoteCatalog(catalog.markets, filters, filters.limit)
-  return {
-    output: {
-      command: 'catalog',
-      filters,
-      dataset_total: datasets.length,
-      datasets,
-    },
-  }
-}
-
-async function runListCommand(
-  config: Config,
-  filters: { source: string | null; market: string | null; date: string | null },
-): Promise<LocalListOutput> {
-  const entries = await new Layout(config.root).listLocalSnapshots()
-  const snapshots = entries
-    .filter((entry) => matchesExact(entry.source ?? null, filters.source))
-    .filter((entry) => matchesExact(entry.market ?? null, filters.market))
-    .filter((entry) => matchesExact(entry.date ?? null, filters.date))
-    .map((entry) => toLocalSnapshotJson(entry))
-
-  return {
-    command: 'list',
-    root: config.root,
-    filters,
-    snapshot_total: snapshots.length,
-    snapshots,
-  }
-}
-
-async function runDownloadCommand(
-  config: Config,
-  client: PolarisClient,
-  options: {
-    source: string
-    market: string
-    from: string
-    to: string
-    concurrency?: number | undefined
-  },
-): Promise<{ output: SyncOutput; exitCode: number }> {
-  const requestedRange = {
-    from: parseRfc3339(options.from, '--from').toISOString(),
-    to: parseRfc3339(options.to, '--to').toISOString(),
-  }
-  if (requestedRange.from > requestedRange.to) {
-    throw invalidArgument('--from must be less than or equal to --to')
-  }
-
-  const layout = new Layout(config.root)
-  const guard = await acquireSyncLock(layout)
-  try {
-    const plan = await buildSyncPlan(client, config, options.source, options.market, requestedRange)
-    const concurrency = options.concurrency ?? config.concurrency
-    if (concurrency <= 0) throw invalidArgument('--concurrency must be greater than zero')
-    const execution = await executeSync(client, plan, concurrency)
-    const output = toSyncOutput(plan, execution)
-    return { output, exitCode: output.failed_total > 0 ? 1 : 0 }
-  } finally {
-    await guard.release()
-  }
-}
-
-async function runResetCommand(config: Config): Promise<ResetOutput> {
-  const layout = new Layout(config.root)
-  const guard = await acquireSyncLock(layout)
-  try {
-    const snapshotTotal = (await layout.listLocalSnapshots()).length
-    const candidateRoots = [layout.dataRoot(), layout.tmpRoot(), layout.cacheRoot()]
-    const removedRoots: string[] = []
-    for (const root of candidateRoots) {
-      try {
-        await fs.rm(root, { recursive: true })
-        removedRoots.push(root)
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException
-        if (err.code !== 'ENOENT') throw error
-      }
-    }
-    await clearBookmarks(config.root)
-    return {
-      command: 'reset',
-      root: config.root,
-      snapshot_total: snapshotTotal,
-      removed_roots: removedRoots,
-    }
-  } finally {
-    await guard.release()
-  }
-}
-
-async function runLoginCommand(config: Config): Promise<{
-  human: string
-  json: {
-    status: 'signed_in'
-    user_id: string
-    display_name: string | null
-    email: string | null
-    plan: string | null
-  }
-}> {
-  const client = new PolarisClient(config.baseUrl, undefined, config.timeoutMs)
-  const start = await client.startCliAuth()
-
-  const lines = [
-    'Polaris login',
-    `Base URL: ${config.baseUrl}`,
-    `Code: ${start.user_code}`,
-    `Browser: ${start.login_url}`,
-  ]
-
-  try {
-    await openUrl(start.login_url)
-    lines.push('Opened browser. Finish login there to continue.')
-  } catch (error) {
-    lines.push('Open the URL above manually to continue.')
-    if (error instanceof Error) lines.push(error.message)
-  }
-
-  while (true) {
-    const poll = await client.pollCliAuth(start.request_id, start.poll_token)
-    if (poll.status === 'pending') {
-      await sleep(Math.max(poll.interval_ms, MIN_CLI_AUTH_POLL_INTERVAL_MS))
-      continue
-    }
-    if (poll.status === 'approved') {
-      const store = new KeychainCredentialStore()
-      await store.setApiKey(poll.api_key)
-      const signedInAs = poll.display_name ?? poll.email ?? poll.user_id
-      lines.push(`Signed in as ${signedInAs}.`)
-
-      let plan: string | null = null
-      try {
-        const accountClient = new PolarisClient(config.baseUrl, poll.api_key, config.timeoutMs)
-        const account = await accountClient.fetchAccount()
-        plan = account.subscription.tier
-        lines.push(`Plan: ${plan}`)
-      } catch {
-        // Keep parity with Rust best-effort fetch.
-      }
-
-      return {
-        human: lines.join('\n'),
-        json: {
-          status: 'signed_in',
-          user_id: poll.user_id,
-          display_name: poll.display_name ?? null,
-          email: poll.email ?? null,
-          plan,
-        },
-      }
-    }
-    if (poll.status === 'consumed') throw invalidArgument('login session was already consumed')
-    throw invalidArgument('login session expired')
-  }
-}
-
-function filterRemoteCatalog(
-  markets: CatalogMarket[],
-  filters: { source: string | null; market: string | null; search: string | null },
-  limit: number,
-): RemoteDatasetEntry[] {
-  const datasets = markets
-    .filter((market) => matchesExact(market.source, filters.source))
-    .filter((market) => matchesExact(market.market, filters.market))
-    .map((market) => toRemoteDatasetEntry(market))
-    .filter((entry) => matchesSearch(entry, filters.search))
-    .sort(
-      (left, right) =>
-        accessSortOrder(left.access) - accessSortOrder(right.access) ||
-        left.dataset.localeCompare(right.dataset),
-    )
-
-  return datasets.slice(0, limit)
-}
-
-function toRemoteDatasetEntry(market: CatalogMarket): RemoteDatasetEntry {
-  const entry: RemoteDatasetEntry = {
-    source: market.source,
-    market: market.market,
-    start: market.start,
-    end: market.end,
-    catalog_source: market.catalog_source ?? null,
-    access: market.access
-      ? {
-          status: market.access.status,
-          public_cutoff_date: market.access.public_cutoff_date ?? null,
-        }
-      : null,
-    dataset: `${market.source}:${market.market}`,
-  }
-  if (market.categories.length > 0) entry.categories = market.categories
-  return entry
-}
-
-function matchesSearch(entry: RemoteDatasetEntry, search: string | null): boolean {
-  const normalized = search?.trim().toLowerCase()
-  if (!normalized) return true
-  const haystack = [
-    entry.dataset,
-    entry.catalog_source ?? '',
-    ...(entry.categories ?? []),
-    accessSummary(entry.access),
-  ]
-    .join(' ')
-    .toLowerCase()
-  return normalized.split(/\s+/).every((token) => haystack.includes(token))
-}
-
-function accessSortOrder(
-  access: RemoteDatasetEntry['access'],
-): number {
-  if (!access) return Number.MAX_SAFE_INTEGER
-  switch (access.status) {
-    case 'open':
-      return 0
-    case 'preview':
-      return 1
-    case 'restricted':
-      return 2
-  }
-}
-
-function accessSummary(access: RemoteDatasetEntry['access']): string {
-  if (!access) return 'unknown'
-  if (access.status === 'preview' && access.public_cutoff_date) {
-    return `preview from ${access.public_cutoff_date}`
-  }
-  return access.status
-}
-
-function toLocalSnapshotJson(entry: LocalSnapshotEntry) {
-  return {
-    key: entry.key,
-    path: entry.path,
-    filename: entry.filename,
-    source: entry.source ?? null,
-    market: entry.market ?? null,
-    date: entry.date ?? null,
-    start: null,
-    end: null,
-  }
-}
-
-function toSyncOutput(plan: SyncPlan, execution: SyncExecution): SyncOutput {
-  return {
-    command: 'download',
-    source: plan.source,
-    market: plan.market,
-    requested_range: plan.requestedRange,
-    effective_range: plan.effectiveRange,
-    root: plan.root,
-    remote_total: remoteTotal(plan),
-    downloaded_total: execution.downloadedKeys.length,
-    skipped_total: presentTotal(plan),
-    failed_total: execution.failed.length,
-    downloaded_keys: execution.downloadedKeys,
-    failed: execution.failed,
-  }
-}
-
-function renderRemoteListOutput(output: RemoteListOutput): string {
-  const lines = ['catalog']
-  if (output.filters.source || output.filters.market || output.filters.search) {
-    lines.push(
-      `filters: source=${formatMaybe(output.filters.source)} market=${formatMaybe(output.filters.market)} search=${formatMaybe(output.filters.search)}`,
-    )
-  }
-  lines.push(`datasets: ${output.dataset_total}`)
-  if (output.datasets.length > 0) {
-    lines.push('remote datasets:')
-    for (const dataset of output.datasets) {
-      lines.push(
-        `  ${dataset.source}:${dataset.market} ${dataset.start} -> ${dataset.end} (${accessSummary(dataset.access)})`,
-      )
-    }
-  }
-  return lines.join('\n')
-}
-
-function renderLocalListOutput(output: LocalListOutput): string {
-  const lines = ['list', `root: ${output.root}`]
-  if (output.filters.source || output.filters.market || output.filters.date) {
-    lines.push(
-      `filters: source=${formatMaybe(output.filters.source)} market=${formatMaybe(output.filters.market)} date=${formatMaybe(output.filters.date)}`,
-    )
-  }
-  lines.push(`snapshots: ${output.snapshot_total}`)
-  if (output.snapshots.length > 0) {
-    lines.push('local snapshots:')
-    for (const snapshot of output.snapshots.slice(0, 50)) lines.push(`  ${snapshot.key}`)
-    if (output.snapshots.length > 50) {
-      lines.push(`  ... ${output.snapshots.length - 50} more`)
-    }
-  }
-  return lines.join('\n')
-}
-
-function renderSyncOutput(output: SyncOutput): string {
-  const lines = [
-    `download ${output.source} ${output.market}`,
-    `root: ${output.root}`,
-    `requested: ${output.requested_range.from} -> ${output.requested_range.to}`,
-    `effective: ${output.effective_range.from} -> ${output.effective_range.to}`,
-    `remote: ${output.remote_total}`,
-    `downloaded: ${output.downloaded_total}`,
-    `skipped: ${output.skipped_total}`,
-    `failed: ${output.failed_total}`,
-  ]
-  if (output.failed.length > 0) {
-    lines.push('failed keys:')
-    for (const failure of output.failed) lines.push(`  ${failure.key}: ${failure.error}`)
-  }
-  return lines.join('\n')
-}
-
-function renderResetOutput(output: ResetOutput): string {
-  const lines = ['reset', `root: ${output.root}`, `removed snapshots: ${output.snapshot_total}`]
-  if (output.removed_roots.length > 0) {
-    lines.push('removed roots:')
-    for (const root of output.removed_roots) lines.push(`  ${root}`)
-  }
-  return lines.join('\n')
-}
-
-function formatCommandResult<T>(
-  formatExplicit: boolean,
-  jsonValue: T,
-  human: string,
-  meta?: { cta?: { commands: Array<Record<string, unknown>> } | undefined },
-): T | string {
-  if (formatExplicit) {
-    return jsonValue
-  }
-  if (meta?.cta) {
-    const next = meta.cta.commands
-      .map((command) => {
-        const name = String(command.command)
-        const description = command.description ? ` - ${String(command.description)}` : ''
-        return `  ${name}${description}`
-      })
-      .join('\n')
-    return `${human}\nNext:\n${next}`
-  }
-  return human
+  return !formatExplicit && process.stdout.isTTY === true && process.stdin.isTTY === true;
 }
 
 function handleCliError(
   c: {
     error: (options: {
-      code: string
-      message: string
-      retryable?: boolean
-      exitCode?: number
-    }) => never
+      code: string;
+      message: string;
+      retryable?: boolean;
+      exitCode?: number;
+    }) => never;
   },
   error: unknown,
 ): never {
-  if (error instanceof Error && 'kind' in error && 'exitCode' in error) {
-    const exitCode = (error as { exitCode: () => number }).exitCode()
-    const kind = String((error as { kind: string }).kind).toUpperCase()
-    const retryable = Boolean((error as { retryable?: boolean }).retryable)
+  if (error instanceof PolarisError) {
     return c.error({
-      code: kind,
+      code: error.kind.toUpperCase(),
       message: error.message,
-      retryable,
-      exitCode,
-    })
+      retryable: error.retryable,
+      exitCode: error.exitCode(),
+    });
   }
   return c.error({
     code: 'OTHER',
     message: error instanceof Error ? error.message : String(error),
     exitCode: 1,
-  })
-}
-
-function matchesExact(value: string | null, filter: string | null): boolean {
-  return filter === null ? true : value === filter
-}
-
-function formatMaybe(value: string | null): string {
-  return value === null ? 'None' : JSON.stringify(value)
+  });
 }
 
 async function promptPassword(prompt: string): Promise<string> {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-  })
+  });
   const mutable = rl as unknown as {
-    _writeToOutput?: ((value: string) => void) | undefined
-    line?: string | undefined
-    output?: NodeJS.WritableStream | undefined
-  }
-  const original = mutable._writeToOutput
+    _writeToOutput?: ((value: string) => void) | undefined;
+    line?: string | undefined;
+    output?: NodeJS.WritableStream | undefined;
+  };
+  const original = mutable._writeToOutput;
   mutable._writeToOutput = (value: string) => {
     if (mutable.line) {
-      mutable.output?.write('*'.repeat(mutable.line.length))
-      return
+      mutable.output?.write('*'.repeat(mutable.line.length));
+      return;
     }
-    mutable.output?.write(value)
-  }
+    mutable.output?.write(value);
+  };
   try {
-    const answer = (await rl.question(prompt)).trim()
-    if (!answer) throw invalidArgument('API key cannot be empty')
-    mutable.output?.write('\n')
-    return answer
+    const answer = (await rl.question(prompt)).trim();
+    if (!answer) throw invalidArgument('API key cannot be empty');
+    mutable.output?.write('\n');
+    return answer;
   } finally {
-    mutable._writeToOutput = original
-    rl.close()
+    mutable._writeToOutput = original;
+    rl.close();
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function compactOptional<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined),
-  ) as T
 }
