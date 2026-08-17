@@ -32,7 +32,5 @@ function toLocalSnapshotJson(entry: LocalSnapshotEntry): LocalSnapshot {
     source: entry.source ?? null,
     market: entry.market ?? null,
     date: entry.date ?? null,
-    start: null,
-    end: null,
   }
 }

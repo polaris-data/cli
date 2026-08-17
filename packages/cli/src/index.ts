@@ -15,6 +15,7 @@ import {
   compactOptional,
   invalidArgument,
   loadConfig,
+  otherError,
   type Config,
 } from '@polaris/core'
 
@@ -156,7 +157,7 @@ cli.command('feedback', {
       const config = await loadRuntimeConfig()
       const client = new PolarisClient(config.baseUrl, config.apiKey, config.timeoutMs)
       const response = await client.submitFeedback(message)
-      if (!response.ok) throw new Error('feedback request failed: API returned ok=false')
+      if (!response.ok) throw otherError('feedback request failed: API returned ok=false')
       return formatCommandResult(c.formatExplicit, { ok: true as const }, 'Feedback sent.')
     } catch (error) {
       return handleCliError(c, error)

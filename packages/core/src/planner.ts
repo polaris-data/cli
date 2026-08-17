@@ -91,10 +91,6 @@ export async function classifySnapshots(
   return snapshots
 }
 
-export function remoteTotal(plan: SyncPlan): number {
-  return plan.snapshots.length
-}
-
 export function presentTotal(plan: SyncPlan): number {
   return plan.snapshots.filter((snapshot) => snapshot.state === 'present').length
 }

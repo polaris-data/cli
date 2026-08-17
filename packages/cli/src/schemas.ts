@@ -34,8 +34,6 @@ export const localSnapshotSchema = z.object({
   source: z.string().nullable(),
   market: z.string().nullable(),
   date: z.string().nullable(),
-  start: z.null(),
-  end: z.null(),
 })
 
 export const localListOutputSchema = z.object({

@@ -101,8 +101,6 @@ export interface LocalSnapshotEntry {
   source?: string | undefined
   market?: string | undefined
   date?: string | undefined
-  start?: string | undefined
-  end?: string | undefined
 }
 
 export interface TimeWindow {

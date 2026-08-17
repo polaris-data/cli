@@ -6,7 +6,6 @@ import {
   invalidArgument,
   parseRfc3339,
   presentTotal,
-  remoteTotal,
 } from '@polaris/core'
 import type { Config, PolarisClient, SyncExecution, SyncPlan } from '@polaris/core'
 
@@ -53,7 +52,7 @@ function toSyncOutput(plan: SyncPlan, execution: SyncExecution): SyncOutput {
     requested_range: plan.requestedRange,
     effective_range: plan.effectiveRange,
     root: plan.root,
-    remote_total: remoteTotal(plan),
+    remote_total: plan.snapshots.length,
     downloaded_total: execution.downloadedKeys.length,
     skipped_total: presentTotal(plan),
     failed_total: execution.failed.length,

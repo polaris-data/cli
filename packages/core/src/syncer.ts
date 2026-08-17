@@ -179,10 +179,6 @@ async function downloadOnce(
       : { type: 'started', key: snapshot.key, totalBytes },
   )
 
-  if (snapshot.state !== 'present') {
-    await fs.rm(snapshot.localPath, { force: true })
-  }
-
   const file = await fs.open(snapshot.tempPath, 'w')
   let downloadedBytes = 0
   try {
