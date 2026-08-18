@@ -66,7 +66,6 @@ export class KeychainCredentialStore implements CredentialStore {
     const trimmed = apiKey.trim();
     if (!trimmed) throw invalidArgument('API key cannot be empty');
 
-    let keychainError: unknown;
     try {
       const keytar = await this.keytarLoader();
       await keytar.setPassword(PRIMARY_SERVICE_NAME, ACCOUNT_NAME, trimmed);
@@ -77,12 +76,10 @@ export class KeychainCredentialStore implements CredentialStore {
       }
       const stored = trimValue(await keytar.getPassword(PRIMARY_SERVICE_NAME, ACCOUNT_NAME));
       if (stored !== trimmed) {
-        keychainError = new Error(
-          'stored Polaris API key could not be read back from OS credential store',
-        );
+        throw new Error('stored Polaris API key could not be read back from OS credential store');
       }
-    } catch (error) {
-      keychainError = error;
+    } catch {
+      // Standalone cross-target builds may not be able to load keytar's native addon.
     }
 
     try {
@@ -95,11 +92,6 @@ export class KeychainCredentialStore implements CredentialStore {
           `failed to persist Polaris API key in fallback file stores: ${String(primaryError)}; ${String(legacyError)}`,
         );
       }
-    }
-
-    if (keychainError) {
-      // File-backed storage is already written above, so preserve Rust semantics.
-      console.warn(`falling back to file-backed Polaris API key storage: ${String(keychainError)}`);
     }
   }
 }
