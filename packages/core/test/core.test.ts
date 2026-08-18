@@ -59,7 +59,7 @@ test('unavailable native credential storage uses the file-backed store', async (
     assert.equal(await store.getApiKey(), undefined);
     await store.setApiKey('fallback-key');
     assert.equal(await store.getApiKey(), 'fallback-key');
-    assert.equal(warnings.length, 1);
+    assert.deepEqual(warnings, []);
   } finally {
     console.warn = previousWarn;
     restoreEnvironment('HOME', previousHome);
